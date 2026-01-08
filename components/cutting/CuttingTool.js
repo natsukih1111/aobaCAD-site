@@ -24,14 +24,78 @@ function safeJsonParse(s) {
   }
 }
 
+// 同じ切り方判定キー（材料/定尺長/切断リスト/端材/切断しろ合計 が同じなら同一パターン）
+function barKey(bar) {
+  const cutsKey = Array.isArray(bar.cuts) ? bar.cuts.join(',') : '';
+  return `${bar.source}|${bar.stockLen}|${bar.remain}|${bar.kerfTotal}|${cutsKey}`;
+}
+
+// 連続する同一パターンだけまとめる（Noの範囲表示が綺麗になる）
+function groupConsecutiveBars(bars) {
+  const out = [];
+  let currentNo = 1;
+
+  for (let i = 0; i < (bars || []).length; i++) {
+    const b = bars[i];
+    const rep = Math.max(1, Number(b.repeat || 1));
+
+    if (out.length === 0) {
+      out.push({
+        ...b,
+        _startNo: currentNo,
+        _endNo: currentNo + rep - 1,
+        _count: rep,
+      });
+      currentNo += rep;
+      continue;
+    }
+
+    const last = out[out.length - 1];
+    const same = barKey(last) === barKey(b);
+
+    if (same) {
+      last._endNo += rep;
+      last._count += rep;
+      currentNo += rep;
+    } else {
+      out.push({
+        ...b,
+        _startNo: currentNo,
+        _endNo: currentNo + rep - 1,
+        _count: rep,
+      });
+      currentNo += rep;
+    }
+  }
+
+  return out;
+}
+
+// まとめない時でも No を正しく振る（repeat対応）
+function addNumbering(bars) {
+  const out = [];
+  let currentNo = 1;
+  for (const b of bars || []) {
+    const rep = Math.max(1, Number(b.repeat || 1));
+    out.push({
+      ...b,
+      _startNo: currentNo,
+      _endNo: currentNo + rep - 1,
+      _count: rep,
+    });
+    currentNo += rep;
+  }
+  return out;
+}
+
 export default function CuttingTool() {
   const [type, setType] = useState('L');
   const [comment, setComment] = useState('');
 
   const [kerfEnabled, setKerfEnabled] = useState(true);
-  const kerfMm = kerfEnabled ? 3 : 0;
+  const kerfMm = kerfEnabled ? 3 : 0; // ★切断しろ 3mm
 
-  // ★重ね切りモード
+  // ★重ね切りモード（歩留まり無視）
   const [stackingMode, setStackingMode] = useState(false);
 
   const [rows, setRows] = useState([
@@ -43,9 +107,14 @@ export default function CuttingTool() {
   const [remnants, setRemnants] = useState([]);
   const [result, setResult] = useState(null);
 
+  // ★定尺テーブル（ユーザー編集可能）
   const [stockTable, setStockTable] = useState(getDefaultTable());
   const [newStockLen, setNewStockLen] = useState('6000');
 
+  // ★結果のまとめ表示（歩留まり優先でも使う）
+  const [groupSamePattern, setGroupSamePattern] = useState(true);
+
+  // 初回ロード（localStorage）
   useEffect(() => {
     const raw =
       typeof window !== 'undefined'
@@ -62,6 +131,7 @@ export default function CuttingTool() {
     setStockTable(base);
   }, []);
 
+  // 保存（stockTableが変わったら保存）
   useEffect(() => {
     if (typeof window === 'undefined') return;
     localStorage.setItem(STOCK_TABLE_STORAGE_KEY, JSON.stringify(stockTable));
@@ -76,7 +146,9 @@ export default function CuttingTool() {
     setRows((prev) => prev.filter((_, i) => i !== idx));
   }
   function updateRow(idx, key, value) {
-    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r)));
+    setRows((prev) =>
+      prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r))
+    );
   }
 
   function addRemnantRow() {
@@ -86,9 +158,12 @@ export default function CuttingTool() {
     setRemnants((prev) => prev.filter((_, i) => i !== idx));
   }
   function updateRemnantRow(idx, key, value) {
-    setRemnants((prev) => prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r)));
+    setRemnants((prev) =>
+      prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r))
+    );
   }
 
+  // ★定尺の追加/削除
   function addStockLength() {
     const v = toInt(newStockLen);
     if (v <= 0) return;
@@ -135,6 +210,12 @@ export default function CuttingTool() {
 
     setResult(out);
   }
+
+  const displayBars = useMemo(() => {
+    if (!result || !result.ok) return [];
+    const numbered = addNumbering(result.bars || []);
+    return groupSamePattern ? groupConsecutiveBars(numbered) : numbered;
+  }, [result, groupSamePattern]);
 
   return (
     <div className="space-y-4">
@@ -208,7 +289,10 @@ export default function CuttingTool() {
               onChange={(e) => setNewStockLen(e.target.value)}
               placeholder="追加する定尺(mm)"
             />
-            <button className="rounded-lg border px-3 py-2 hover:bg-gray-50" onClick={addStockLength}>
+            <button
+              className="rounded-lg border px-3 py-2 hover:bg-gray-50"
+              onClick={addStockLength}
+            >
               定尺を追加
             </button>
           </div>
@@ -229,7 +313,7 @@ export default function CuttingTool() {
           )}
         </div>
 
-        {/* 切断しろ + 重ね切りモード */}
+        {/* 切断しろ + 重ね切り */}
         <div className="flex flex-wrap items-center gap-6 print:text-lg">
           <label className="flex items-center gap-2 text-sm print:text-lg">
             <input
@@ -257,14 +341,16 @@ export default function CuttingTool() {
 
           <div className="text-xs text-gray-500 print:hidden">
             {stackingMode
-              ? '同じ切断パターンをできるだけ繰り返して作ります（重ねて切りやすい）'
+              ? '同じ切断パターンをできるだけ繰り返して作ります'
               : '歩留まり（端材の少なさ）優先で作ります'}
           </div>
         </div>
 
         {/* 必要切断 */}
         <div className="space-y-2">
-          <div className="text-sm font-semibold print:text-lg">必要な切断（長さ / 本数）</div>
+          <div className="text-sm font-semibold print:text-lg">
+            必要な切断（長さ / 本数）
+          </div>
 
           <div className="space-y-2">
             {rows.map((r, idx) => (
@@ -293,6 +379,7 @@ export default function CuttingTool() {
                   className="ml-auto rounded-lg border px-3 py-2 hover:bg-gray-50 print:hidden"
                   onClick={() => removeRow(idx)}
                   disabled={rows.length <= 1}
+                  title={rows.length <= 1 ? '最低1行必要です' : '削除'}
                 >
                   削除
                 </button>
@@ -300,7 +387,10 @@ export default function CuttingTool() {
             ))}
           </div>
 
-          <button className="rounded-lg border px-3 py-2 hover:bg-gray-50 print:hidden" onClick={addRow}>
+          <button
+            className="rounded-lg border px-3 py-2 hover:bg-gray-50 print:hidden"
+            onClick={addRow}
+          >
             行を追加
           </button>
         </div>
@@ -339,6 +429,7 @@ export default function CuttingTool() {
                 <button
                   className="ml-auto rounded-lg border px-3 py-2 hover:bg-gray-50 print:hidden"
                   onClick={() => removeRemnantRow(idx)}
+                  title="削除"
                 >
                   削除
                 </button>
@@ -346,26 +437,46 @@ export default function CuttingTool() {
             ))}
           </div>
 
-          <button className="rounded-lg border px-3 py-2 hover:bg-gray-50 print:hidden" onClick={addRemnantRow}>
+          <button
+            className="rounded-lg border px-3 py-2 hover:bg-gray-50 print:hidden"
+            onClick={addRemnantRow}
+          >
             端材を追加
           </button>
         </div>
       </div>
 
-      {/* 結果（コメントはここに出さない） */}
+      {/* 結果 */}
       <div className="rounded-xl border p-4 print:border-black print:text-lg">
-        <div className="font-semibold mb-2 print:text-xl">結果</div>
+        <div className="flex items-center gap-3 mb-2">
+          <div className="font-semibold print:text-xl">結果</div>
 
-        {!result && <div className="text-sm text-gray-600 print:hidden">「計算する」を押してください。</div>}
+          {/* ★まとめボタン */}
+          {result && result.ok && (
+            <button
+              className="ml-auto rounded-lg border px-3 py-2 hover:bg-gray-50 text-sm print:hidden"
+              onClick={() => setGroupSamePattern((v) => !v)}
+              title="同じ切り方が連続している所をまとめます"
+            >
+              {groupSamePattern ? 'まとめ解除' : '同じ切り方をまとめる'}
+            </button>
+          )}
+        </div>
 
-        {result && !result.ok && <div className="text-sm text-red-600 print:text-black">{result.error}</div>}
+        {!result && (
+          <div className="text-sm text-gray-600 print:hidden">「計算する」を押してください。</div>
+        )}
+
+        {result && !result.ok && (
+          <div className="text-sm text-red-600 print:text-black">{result.error}</div>
+        )}
 
         {result && result.ok && (
           <div className="space-y-4">
             <div className="rounded-lg bg-gray-50 border p-3 text-sm space-y-1 print:bg-white print:border-black print:text-lg">
               <div>
                 <span className="font-semibold">モード：</span>
-                {result.summary.stackingMode ? '重ね切り（歩留まり無視）' : '歩留まり優先'}
+                {stackingMode ? '重ね切り（歩留まり無視）' : '歩留まり優先'}
               </div>
 
               <div>
@@ -390,46 +501,49 @@ export default function CuttingTool() {
             </div>
 
             <div className="space-y-3">
-              {result.bars.map((bar, i) => (
-                <div
-                  key={i}
-                  className={[
-                    'rounded-lg border p-3 print:border-black',
-                    'print:[break-inside:avoid]',
-                  ].join(' ')}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="font-semibold">No.{i + 1}</div>
+              {displayBars.map((bar, i) => {
+                const showRange = bar._endNo > bar._startNo;
+                const labelNo = showRange
+                  ? `No.${bar._startNo}~${bar._endNo}`
+                  : `No.${bar._startNo}`;
 
-                    <div className="text-sm print:text-lg">
-                      材料：
-                      <span className="font-semibold">{bar.stockLen} mm</span>
-                      <span className="text-xs text-gray-500 ml-2 print:text-black">
-                        （{bar.source === 'remnant' ? '端材' : '購入定尺'}）
-                      </span>
-                    </div>
+                return (
+                  <div
+                    key={i}
+                    className={[
+                      'rounded-lg border p-3 print:border-black',
+                      'print:[break-inside:avoid]',
+                    ].join(' ')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="font-semibold">{labelNo}</div>
 
-                    {bar.repeat > 1 && (
                       <div className="text-sm print:text-lg">
-                        <span className="font-semibold">同一パターン：</span>
-                        {bar.repeat} 本分（重ね切り向け）
+                        材料：<span className="font-semibold">{bar.stockLen} mm</span>
+                        <span className="text-xs text-gray-500 ml-2 print:text-black">
+                          （{bar.source === 'remnant' ? '端材' : '購入定尺'}）
+                        </span>
+                        <span className="ml-3">
+                          端材：<span className="font-semibold">{bar.remain} mm</span>
+                        </span>
+                        <span className="ml-3">
+                          切断しろ：<span className="font-semibold">{bar.kerfTotal} mm</span>
+                        </span>
                       </div>
-                    )}
 
-                    <div className="text-sm print:text-lg">
-                      端材：<span className="font-semibold">{bar.remain} mm</span>
+                      {bar._count > 1 && (
+                        <div className="ml-auto font-bold text-sm print:text-lg">
+                          ×{bar._count}本
+                        </div>
+                      )}
                     </div>
 
-                    <div className="text-sm print:text-lg">
-                      切断しろ：<span className="font-semibold">{bar.kerfTotal} mm</span>
+                    <div className="mt-2 text-sm text-gray-700 print:text-lg print:text-black">
+                      切断： <span className="font-semibold">{bar.cuts.join(' + ')}</span> (mm)
                     </div>
                   </div>
-
-                  <div className="mt-2 text-sm text-gray-700 print:text-lg print:text-black">
-                    切断： <span className="font-semibold">{bar.cuts.join(' + ')}</span> (mm)
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
