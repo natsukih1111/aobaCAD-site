@@ -1,0 +1,830 @@
+{
+  "allowedRootPrefixes": ["app/", "components/", "hooks/", "lib/", "scripts/", "styles/"],
+  "files": {
+    "components/editor/panels/RightToolsPanel.js": // file: components/editor/panels/RightToolsPanel.js
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+
+function num(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export default function RightToolsPanel({
+  width = 240,
+
+  // state
+  currentTool = 'select',
+  selectedCount = 0,
+  singleSelection = false,
+  primaryObject = null,
+
+  // display
+  showGrid = true,
+  setShowGrid,
+  showShadows = true,
+  setShowShadows,
+
+  // actions（page.js側の処理を呼ぶ）
+  // 期待：
+  // actions.commitPan(delta)
+  // actions.commitRotate({ axis, deg })
+  // actions.duplicateTranslate(delta)
+  // actions.duplicateRotate({ axis, deg })
+  // actions.duplicateMirror({ axis })
+  // actions.setPrimaryXYZ(axis, value)
+  // actions.setPrimarySizeCube(value) etc...
+  // actions.updatePrimary(patch)
+  actions = {},
+}) {
+  const hasPrimary = !!primaryObject;
+
+  // ====== ツール用のローカルstate（右パネルで確実に入力できるように） ======
+  const [panDelta, setPanDelta] = useState({ x: 0, y: 0, z: 0 });
+
+  const [rotAxis, setRotAxis] = useState('y');
+  const [rotAngleDeg, setRotAngleDeg] = useState(0);
+
+  const [dupMove, setDupMove] = useState({ x: 0, y: 0, z: 0 });
+
+  const [dupRotAxis, setDupRotAxis] = useState('y');
+  const [dupRotDeg, setDupRotDeg] = useState(90);
+
+  const [dupMirrorAxis, setDupMirrorAxis] = useState('x');
+
+  // ツール切替時に初期化
+  useEffect(() => {
+    if (currentTool === 'pan') setPanDelta({ x: 0, y: 0, z: 0 });
+    if (currentTool === 'rotate') setRotAngleDeg(0);
+    if (currentTool === 'dup-translate') setDupMove({ x: 0, y: 0, z: 0 });
+    // dup-rotate / dup-mirror は最後の値を保持してもOKなのでリセットしない
+  }, [currentTool]);
+
+  const AXIS_ACTIVE = 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300';
+  const AXIS_INACTIVE = 'bg-white hover:bg-gray-50';
+
+  const header = useMemo(() => {
+    if (!selectedCount) return '未選択';
+    if (selectedCount === 1) return `選択: ${primaryObject?.name ?? primaryObject?.id ?? ''}`;
+    return `選択: ${selectedCount}個`;
+  }, [selectedCount, primaryObject?.id, primaryObject?.name]);
+
+  const isToolPanel =
+    currentTool === 'pan' ||
+    currentTool === 'rotate' ||
+    currentTool === 'dup-translate' ||
+    currentTool === 'dup-rotate' ||
+    currentTool === 'dup-mirror';
+
+  const QuickRotateBtn = ({ deg }) => (
+    <button
+      className={`rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
+        selectedCount === 0 ? 'opacity-40 cursor-not-allowed' : ''
+      }`}
+      type="button"
+      onClick={() => {
+        if (selectedCount === 0) return;
+        // ワンタッチはそのまま確定
+        actions.commitRotate?.({ axis: rotAxis, deg });
+      }}
+      title={`${deg > 0 ? '+' : ''}${deg}°`}
+    >
+      {deg > 0 ? `+${deg}°` : `${deg}°`}
+    </button>
+  );
+
+  return (
+    <aside className="border-l bg-white flex flex-col min-h-0 overflow-hidden" style={{ width }}>
+      <div className="border-b px-3 py-2 text-sm font-semibold truncate">構成ツール</div>
+
+      <div className="flex-1 overflow-auto p-3 space-y-4">
+        {/* 表示ON/OFF（既存） */}
+        <div className="rounded border p-2 space-y-2">
+          <div className="text-xs font-semibold">表示</div>
+
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={!!showGrid} onChange={(e) => setShowGrid?.(e.target.checked)} />
+            グリッド線を表示
+          </label>
+
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={!!showShadows} onChange={(e) => setShowShadows?.(e.target.checked)} />
+            影（シャドウ）を表示
+          </label>
+        </div>
+
+        <div className="text-xs text-gray-600">
+          <div className="font-semibold">{header}</div>
+          ツール: <span className="font-semibold">{currentTool}</span>
+        </div>
+
+        {/* ========== 平行移動（数値） ========== */}
+        {currentTool === 'pan' ? (
+          <div className="space-y-2 rounded border p-2">
+            <div className="text-xs font-semibold">平行移動（まとめて移動）</div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <div className="text-[10px] text-gray-500 mb-1">ΔX(mm)</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={panDelta.x}
+                  onChange={(e) => setPanDelta((d) => ({ ...d, x: num(e.target.value, 0) }))}
+                />
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 mb-1">ΔY(mm)</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={panDelta.y}
+                  onChange={(e) => setPanDelta((d) => ({ ...d, y: num(e.target.value, 0) }))}
+                />
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 mb-1">ΔZ(mm)</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={panDelta.z}
+                  onChange={(e) => setPanDelta((d) => ({ ...d, z: num(e.target.value, 0) }))}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
+                  selectedCount === 0 ? 'opacity-40 cursor-not-allowed' : ''
+                }`}
+                type="button"
+                onClick={() => {
+                  if (selectedCount === 0) return;
+                  actions.commitPan?.(panDelta);
+                }}
+              >
+                確定
+              </button>
+              <button
+                className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => setPanDelta({ x: 0, y: 0, z: 0 })}
+              >
+                リセット
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* ========== 回転（数値 + ワンタッチ） ========== */}
+        {currentTool === 'rotate' ? (
+          <div className="space-y-2 rounded border p-2">
+            <div className="text-xs font-semibold">回転</div>
+
+            <div className="text-[11px] text-gray-500">ワンタッチ（確定回転）</div>
+            <div className="flex flex-wrap gap-2">
+              <QuickRotateBtn deg={-90} />
+              <QuickRotateBtn deg={-45} />
+              <QuickRotateBtn deg={180} />
+              <QuickRotateBtn deg={45} />
+              <QuickRotateBtn deg={90} />
+            </div>
+
+            <div className="text-[11px] text-gray-500 mt-2">軸</div>
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setRotAxis('x')}
+                type="button"
+              >
+                X
+              </button>
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setRotAxis('y')}
+                type="button"
+              >
+                Y
+              </button>
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setRotAxis('z')}
+                type="button"
+              >
+                Z
+              </button>
+            </div>
+
+            <div>
+              <div className="text-[10px] text-gray-500 mb-1">角度（度）</div>
+              <input
+                className="w-full rounded border px-2 py-1 text-xs"
+                type="number"
+                value={rotAngleDeg}
+                onChange={(e) => setRotAngleDeg(num(e.target.value, 0))}
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
+                  selectedCount === 0 ? 'opacity-40 cursor-not-allowed' : ''
+                }`}
+                type="button"
+                onClick={() => {
+                  if (selectedCount === 0) return;
+                  actions.commitRotate?.({ axis: rotAxis, deg: rotAngleDeg });
+                }}
+              >
+                確定
+              </button>
+              <button
+                className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => setRotAngleDeg(0)}
+              >
+                リセット
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* ========== 平行複製（数値） ========== */}
+        {currentTool === 'dup-translate' ? (
+          <div className="space-y-2 rounded border p-2">
+            <div className="text-xs font-semibold">平行複製</div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <div className="text-[10px] text-gray-500 mb-1">ΔX(mm)</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={dupMove.x}
+                  onChange={(e) => setDupMove((d) => ({ ...d, x: num(e.target.value, 0) }))}
+                />
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 mb-1">ΔY(mm)</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={dupMove.y}
+                  onChange={(e) => setDupMove((d) => ({ ...d, y: num(e.target.value, 0) }))}
+                />
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 mb-1">ΔZ(mm)</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={dupMove.z}
+                  onChange={(e) => setDupMove((d) => ({ ...d, z: num(e.target.value, 0) }))}
+                />
+              </div>
+            </div>
+
+            <button
+              className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
+                selectedCount === 0 ? 'opacity-40 cursor-not-allowed' : ''
+              }`}
+              type="button"
+              onClick={() => {
+                if (selectedCount === 0) return;
+                actions.duplicateTranslate?.(dupMove);
+              }}
+            >
+              複製
+            </button>
+
+            <button
+              className="w-full rounded border px-2 py-1 text-xs hover:bg-gray-50"
+              type="button"
+              onClick={() => setDupMove({ x: 0, y: 0, z: 0 })}
+            >
+              リセット
+            </button>
+          </div>
+        ) : null}
+
+        {/* ========== 回転複製（軸ボタン + 角度） ========== */}
+        {currentTool === 'dup-rotate' ? (
+          <div className="space-y-2 rounded border p-2">
+            <div className="text-xs font-semibold">回転複製</div>
+
+            <div className="text-[11px] text-gray-500">軸</div>
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setDupRotAxis('x')}
+                type="button"
+              >
+                X
+              </button>
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setDupRotAxis('y')}
+                type="button"
+              >
+                Y
+              </button>
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setDupRotAxis('z')}
+                type="button"
+              >
+                Z
+              </button>
+            </div>
+
+            <div>
+              <div className="text-[10px] text-gray-500 mb-1">角度（度）</div>
+              <input
+                className="w-full rounded border px-2 py-1 text-xs"
+                type="number"
+                value={dupRotDeg}
+                onChange={(e) => setDupRotDeg(num(e.target.value, 0))}
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button className="rounded border px-2 py-1 text-xs hover:bg-gray-50" type="button" onClick={() => setDupRotDeg(90)}>90°</button>
+              <button className="rounded border px-2 py-1 text-xs hover:bg-gray-50" type="button" onClick={() => setDupRotDeg(45)}>45°</button>
+              <button className="rounded border px-2 py-1 text-xs hover:bg-gray-50" type="button" onClick={() => setDupRotDeg(180)}>180°</button>
+              <button className="rounded border px-2 py-1 text-xs hover:bg-gray-50" type="button" onClick={() => setDupRotDeg(-90)}>-90°</button>
+            </div>
+
+            <button
+              className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
+                selectedCount === 0 ? 'opacity-40 cursor-not-allowed' : ''
+              }`}
+              type="button"
+              onClick={() => {
+                if (selectedCount === 0) return;
+                actions.duplicateRotate?.({ axis: dupRotAxis, deg: dupRotDeg });
+              }}
+            >
+              複製
+            </button>
+          </div>
+        ) : null}
+
+        {/* ========== ミラー複製（XYZ軸ボタン） ========== */}
+        {currentTool === 'dup-mirror' ? (
+          <div className="space-y-2 rounded border p-2">
+            <div className="text-xs font-semibold">ミラー複製</div>
+
+            <div className="text-[11px] text-gray-500">軸</div>
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${dupMirrorAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setDupMirrorAxis('x')}
+                type="button"
+              >
+                X
+              </button>
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${dupMirrorAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setDupMirrorAxis('y')}
+                type="button"
+              >
+                Y
+              </button>
+              <button
+                className={`flex-1 rounded border px-2 py-1 text-xs ${dupMirrorAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
+                onClick={() => setDupMirrorAxis('z')}
+                type="button"
+              >
+                Z
+              </button>
+            </div>
+
+            <button
+              className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
+                selectedCount === 0 ? 'opacity-40 cursor-not-allowed' : ''
+              }`}
+              type="button"
+              onClick={() => {
+                if (selectedCount === 0) return;
+                actions.duplicateMirror?.({ axis: dupMirrorAxis });
+              }}
+            >
+              複製
+            </button>
+          </div>
+        ) : null}
+
+        {/* ========== 既存：単体編集（消さない） ========== */}
+        {!isToolPanel ? (
+          singleSelection && hasPrimary ? (
+            <div className="space-y-2 rounded border p-2">
+              <div className="text-xs font-semibold">単体編集（mm）</div>
+
+              <div className="text-[11px] text-gray-600">位置XYZ（mm）</div>
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  className="rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={primaryObject.positionMm?.[0] ?? 0}
+                  onChange={(e) => actions.setPrimaryXYZ?.('x', e.target.value)}
+                />
+                <input
+                  className="rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={primaryObject.positionMm?.[1] ?? 0}
+                  onChange={(e) => actions.setPrimaryXYZ?.('y', e.target.value)}
+                />
+                <input
+                  className="rounded border px-2 py-1 text-xs"
+                  type="number"
+                  value={primaryObject.positionMm?.[2] ?? 0}
+                  onChange={(e) => actions.setPrimaryXYZ?.('z', e.target.value)}
+                />
+              </div>
+
+              <div className="text-[11px] text-gray-600 mt-2">大きさ（mm）</div>
+
+              {primaryObject.type === 'cube' ? (
+                <div>
+                  <div className="text-[10px] text-gray-500 mb-1">一辺(mm)</div>
+                  <input
+                    className="w-full rounded border px-2 py-1 text-xs"
+                    type="number"
+                    value={primaryObject.sizeMm ?? 1000}
+                    onChange={(e) => actions.setPrimarySizeCube?.(e.target.value)}
+                  />
+                </div>
+              ) : null}
+
+              {primaryObject.type === 'box' ? (
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">X</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.sizeMm?.[0] ?? 2000}
+                      onChange={(e) => actions.setPrimarySizeBox?.('x', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">Y</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.sizeMm?.[1] ?? 1000}
+                      onChange={(e) => actions.setPrimarySizeBox?.('y', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">Z</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.sizeMm?.[2] ?? 1000}
+                      onChange={(e) => actions.setPrimarySizeBox?.('z', e.target.value)}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {primaryObject.type === 'cylinder' ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">半径(mm)</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.radiusMm ?? 500}
+                      onChange={(e) => actions.setPrimaryCylinderRadius?.(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">高さ(mm)</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.heightMm ?? 2000}
+                      onChange={(e) => actions.setPrimaryCylinderHeight?.(e.target.value)}
+                    />
+                  </div>
+                  <div className="col-span-2 text-[11px] text-gray-500">
+                    ※ 選択後の編集は「半径」で行います（直径にしたいなら半径×2）
+                  </div>
+                </div>
+              ) : null}
+
+              {primaryObject.type === 'cone' ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">半径(mm)</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.radiusMm ?? 500}
+                      onChange={(e) => actions.setPrimaryConeRadius?.(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1">高さ(mm)</div>
+                    <input
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      type="number"
+                      value={primaryObject.heightMm ?? 2000}
+                      onChange={(e) => actions.setPrimaryConeHeight?.(e.target.value)}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="text-[11px] text-gray-600 mt-2">色</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={primaryObject.color ?? '#bfbfbf'}
+                  onChange={(e) => actions.updatePrimary?.({ color: e.target.value })}
+                />
+                <input
+                  className="flex-1 rounded border px-2 py-1 text-xs"
+                  value={primaryObject.color ?? '#bfbfbf'}
+                  onChange={(e) => actions.updatePrimary?.({ color: e.target.value })}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-gray-500">※ 図形を1つ選択すると、位置/サイズ/色を編集できます</div>
+          )
+        ) : (
+          <div className="text-[11px] text-gray-500">
+            ※ ツール操作中は「単体編集」は一旦非表示（選択に戻すと出ます）
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+},
+    "components/editor/EditorToolbar.js":// file: components/editor/EditorToolbar.js
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+
+export default function EditorToolbar({
+  currentTool,
+  setTool,
+  selectMode,
+  setSelectMode,
+
+  onAddCube,
+  onAddBox,
+  onAddCylinder,
+  onAddCone,
+
+  onDeleteSelected,
+  canDelete,
+
+  // 表示メニュー用
+  onResetLayout,
+  leftVisible,
+  rightVisible,
+  onToggleLeft,
+  onToggleRight,
+
+  // ✅ 追加：グループ/融合/分解
+  onGroupSelected,
+  onUngroupSelected,
+  onFuseSelected,
+  canGroup,
+  canUngroup,
+  canFuse,
+}) {
+  const [openView, setOpenView] = useState(false);
+  const [openDup, setOpenDup] = useState(false);
+
+  const viewWrapRef = useRef(null);
+  const dupWrapRef = useRef(null);
+
+  useEffect(() => {
+    const onDown = (e) => {
+      if (openView && viewWrapRef.current && !viewWrapRef.current.contains(e.target)) {
+        setOpenView(false);
+      }
+      if (openDup && dupWrapRef.current && !dupWrapRef.current.contains(e.target)) {
+        setOpenDup(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [openView, openDup]);
+
+  const Btn = ({ active, onClick, children, title, disabled }) => (
+    <button
+      className={`border px-2 py-1 text-xs hover:bg-gray-50 ${
+        active ? 'bg-gray-200' : 'bg-white'
+      } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+      onClick={() => {
+        if (disabled) return;
+        onClick?.();
+      }}
+      title={title}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+
+  const isDupTool =
+    currentTool === 'dup-translate' || currentTool === 'dup-rotate' || currentTool === 'dup-mirror';
+
+  return (
+    <div className="w-full border-b bg-white">
+      {/* 上段：メニュー */}
+      <div className="flex items-center gap-2 px-2 py-1 text-xs">
+        <a href="/" className="mr-2 text-sm underline">
+          3DCADサイト
+        </a>
+
+        <button className="border px-2 py-1 hover:bg-gray-50" type="button">
+          ファイル
+        </button>
+        <button className="border px-2 py-1 hover:bg-gray-50" type="button">
+          編集
+        </button>
+
+        {/* 表示：プルダウン */}
+        <div className="relative" ref={viewWrapRef}>
+          <button
+            className="border px-2 py-1 hover:bg-gray-50"
+            type="button"
+            onClick={() => setOpenView((v) => !v)}
+          >
+            表示 ▾
+          </button>
+
+          {openView ? (
+            <div className="absolute left-0 top-full z-50 mt-1 w-56 border bg-white shadow">
+              <button
+                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  onToggleLeft?.();
+                  setOpenView(false);
+                }}
+              >
+                {leftVisible ? '左パネルを非表示' : '左パネルを表示'}
+              </button>
+              <button
+                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  onToggleRight?.();
+                  setOpenView(false);
+                }}
+              >
+                {rightVisible ? '右パネルを非表示' : '右パネルを表示'}
+              </button>
+
+              <div className="my-1 border-t" />
+
+              <button
+                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  onResetLayout?.();
+                  setOpenView(false);
+                }}
+              >
+                幅を初期に戻す
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <button className="border px-2 py-1 hover:bg-gray-50" type="button">
+          設定
+        </button>
+        <button className="border px-2 py-1 hover:bg-gray-50" type="button">
+          ツール
+        </button>
+        <button className="border px-2 py-1 hover:bg-gray-50" type="button">
+          ヘルプ
+        </button>
+
+        <div className="ml-auto text-xs text-gray-600">Tool: {currentTool}</div>
+      </div>
+
+      {/* 下段：ツールバー */}
+      <div className="flex flex-wrap items-center gap-1 px-2 py-1">
+        <Btn active={currentTool === 'select'} onClick={() => setTool('select')}>
+          選択
+        </Btn>
+        <Btn active={currentTool === 'pan'} onClick={() => setTool('pan')} title="複数をまとめて移動">
+          平行移動
+        </Btn>
+        <Btn active={currentTool === 'rotate'} onClick={() => setTool('rotate')} title="軸と角度で回転">
+          回転
+        </Btn>
+
+        {/* 複製（プルダウン） */}
+        <div className="relative" ref={dupWrapRef}>
+          <Btn active={isDupTool} onClick={() => setOpenDup((v) => !v)} title="複製（平行 / 回転 / ミラー）">
+            複製 ▾
+          </Btn>
+
+          {openDup ? (
+            <div className="absolute left-0 top-full z-50 mt-1 w-40 border bg-white shadow">
+              <button
+                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  setTool('dup-translate');
+                  setOpenDup(false);
+                }}
+              >
+                平行複製
+              </button>
+              <button
+                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  setTool('dup-rotate');
+                  setOpenDup(false);
+                }}
+              >
+                回転複製
+              </button>
+              <button
+                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  setTool('dup-mirror');
+                  setOpenDup(false);
+                }}
+              >
+                ミラー複製
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <span className="mx-1 text-xs text-gray-500">|</span>
+
+        <Btn onClick={onAddCube}>立方体</Btn>
+        <Btn onClick={onAddBox}>直方体</Btn>
+        <Btn onClick={onAddCylinder}>円柱</Btn>
+        <Btn onClick={onAddCone}>円錐</Btn>
+
+        <span className="mx-1 text-xs text-gray-500">|</span>
+
+        <Btn
+          active={selectMode === 'body'}
+          onClick={() => setSelectMode?.('body')}
+          title="立体そのものを選択"
+        >
+          立体モード
+        </Btn>
+        <Btn
+          active={selectMode === 'vertex'}
+          onClick={() => setSelectMode?.('vertex')}
+          title="頂点/中点を表示して原点を設定"
+        >
+          頂点モード
+        </Btn>
+
+        <span className="mx-1 text-xs text-gray-500">|</span>
+
+        {/* ✅ 追加：グループ/融合/分解 */}
+        <Btn
+          onClick={onGroupSelected}
+          disabled={!canGroup}
+          title="複数選択を1つのグループにまとめる"
+        >
+          グループ化
+        </Btn>
+        <Btn
+          onClick={onFuseSelected}
+          disabled={!canFuse}
+          title="選択物を1つの図形として融合（結合メッシュ）"
+        >
+          融合
+        </Btn>
+        <Btn
+          onClick={onUngroupSelected}
+          disabled={!canUngroup}
+          title="グループ化を解除（分解）"
+        >
+          分解
+        </Btn>
+
+        <span className="mx-1 text-xs text-gray-500">|</span>
+
+        <Btn onClick={() => onDeleteSelected?.()} title="Deleteキーでも削除" disabled={!canDelete}>
+          削除
+        </Btn>
+      </div>
+    </div>
+  );
+}
+  }
+}
