@@ -474,31 +474,62 @@ export default function CuttingTool() {
         {result && result.ok && (
           <div className="space-y-4">
             <div className="rounded-lg bg-gray-50 border p-3 text-sm space-y-1 print:bg-white print:border-black print:text-lg">
-              <div>
-                <span className="font-semibold">モード：</span>
-                {stackingMode ? '重ね切り（歩留まり無視）' : '歩留まり優先'}
-              </div>
+  <div>
+    <span className="font-semibold">モード：</span>
+    {result.summary.stackingMode ? '重ね切り（歩留まり無視）' : '歩留まり優先'}
+  </div>
 
-              <div>
-                <span className="font-semibold">切断しろ：</span>
-                {result.summary.kerfMm} mm
-              </div>
+  <div>
+    <span className="font-semibold">切断しろ：</span>
+    {result.summary.kerfMm} mm
+  </div>
 
-              <div>
-                <span className="font-semibold">購入本数（定尺のみ）：</span>
-                {result.summary.purchasedBarsCount} 本
-              </div>
+  <div>
+    <span className="font-semibold">購入本数（定尺のみ）：</span>
+    {result.summary.purchasedBarsCount} 本
+  </div>
 
-              <div>
-                <span className="font-semibold">定尺内訳（購入分）：</span>
-                {Object.keys(result.summary.byPurchasedStock).length === 0
-                  ? '購入なし'
-                  : Object.entries(result.summary.byPurchasedStock)
-                      .sort((a, b) => Number(a[0]) - Number(b[0]))
-                      .map(([k, v]) => `${k}mm × ${v}本`)
-                      .join(' / ')}
-              </div>
-            </div>
+  <div>
+    <span className="font-semibold">定尺内訳（購入分）：</span>
+    {Object.keys(result.summary.byPurchasedStock || {}).length === 0
+      ? '購入なし'
+      : Object.entries(result.summary.byPurchasedStock)
+          .sort((a, b) => Number(a[0]) - Number(b[0]))
+          .map(([k, v]) => `${k}mm × ${v}本`)
+          .join(' / ')}
+  </div>
+
+  <div>
+    <span className="font-semibold">端材使用：</span>
+    {result.summary.usedRemnantsCount} 本
+    {result.summary.usedRemnantsCount > 0 && (
+      <span className="text-xs text-gray-600 print:text-black">
+        {' '}
+        （{(result.summary.usedRemnants || []).join(', ')} mm）
+      </span>
+    )}
+  </div>
+
+  <div>
+    <span className="font-semibold">総材料長：</span>
+    {result.summary.totalStockAll} mm　
+    <span className="font-semibold ml-3">総使用：</span>
+    {result.summary.totalUsedAll} mm　
+    <span className="font-semibold ml-3">総端材：</span>
+    {result.summary.totalRemainAll} mm
+  </div>
+
+  <div>
+    <span className="font-semibold">切断しろ合計：</span>
+    {result.summary.totalKerfAll} mm
+  </div>
+
+  <div>
+    <span className="font-semibold">歩留まり：</span>
+    {Number(result.summary.yieldPct || 0).toFixed(2)} %
+  </div>
+</div>
+
 
             <div className="space-y-3">
               {displayBars.map((bar, i) => {
