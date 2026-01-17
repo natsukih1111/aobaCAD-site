@@ -1,26 +1,26 @@
-
+// file: app/editor/page.js
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import EditorCanvas from '@/components/EditorCanvas';
 import EditorToolbar from '@/components/EditorToolbar';
 import { fetchSteelCatalog } from '@/components/steel/steelCatalog';
+import * as THREE from 'three';
+import { SketchToolPanel, ExtrudePanel } from '@/components/sketch2d/SketchPanels';
+import { detectClosedLoops } from '@/components/sketch2d/SketchOverlay';
 
-function uid() {
-  return `obj_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-}
-function num(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-function numLoose(v, fallback = 0) {
-  // "-" や "" は fallback 扱い（入力途中は state で保持するのでOK）
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-function degToRad(deg) {
-  return (deg * Math.PI) / 180;
-}
+// ✅ sections.js の形状生成（EditorCanvas と一致させる）
+import {
+  buildChannelGeometry,
+  buildAngleGeometry,
+  buildHBeamGeometry,
+  buildPipeGeometry,
+  buildRoundBarGeometry,
+  buildFlatBarGeometry,
+  buildSquarePipeGeometry,
+  buildExpandedMetalGeometry,
+  buildCheckeredPlateGeometry,
+} from '@/components/steel/sections';
 
 const DEFAULT_LEFT = 260;
 const DEFAULT_RIGHT = 260;
@@ -30,97 +30,666 @@ const LS_RIGHT = 'cadsite_editor_right_w_v5';
 
 const MM_BASE = 1000;
 
-function SteelAddPanel({ catalog, draft, setDraft, onPlace, onCancel, disabled }) {
+function uid() {
+  return `obj_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+}
+function num(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function numLoose(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function degToRad(deg) {
+  return (deg * Math.PI) / 180;
+}
+
+// ✅ 生成時のデフォルト原点：正面左下（角）
+// （円柱/円錐は底面中心）
+function defaultPivotFor(type, data) {
+  if (
+    type === 'cube' ||
+    type === 'box' ||
+    type === 'fused' ||
+    type === 'steel-channel' ||
+    type === 'steel-angle' ||
+    type === 'steel-hbeam' ||
+    type === 'steel-squarepipe' ||
+    type === 'steel-expanded' ||
+    type === 'steel-checkered'
+  ) {
+    const s = data?.size ?? [MM_BASE, MM_BASE, MM_BASE];
+    const w = Number(s[0]) || MM_BASE;
+    const h = Number(s[1]) || MM_BASE;
+    const d = Number(s[2]) || MM_BASE;
+    return [-w / 2, -h / 2, -d / 2];
+  }
+  if (type === 'cylinder' || type === 'cone' || type === 'steel-pipe' || type === 'steel-roundbar') {
+    const h = Number(data?.height) || Number(data?.size?.[1]) || MM_BASE;
+    return [0, -h / 2, 0];
+  }
+  if (type === 'steel-flatbar') {
+    // flatbar は外形箱ベースに合わせる
+    const s = data?.size ?? [MM_BASE, MM_BASE, MM_BASE];
+    return [-(s[0] ?? MM_BASE) / 2, -(s[1] ?? MM_BASE) / 2, -(s[2] ?? MM_BASE) / 2];
+  }
+  return [0, 0, 0];
+}
+
+// ✅ 生成時のデフォルト位置：床に置く（Y=0）
+function defaultPositionFor() {
+  return [0, 0, 0];
+}
+
+/** ====== Add panel（立方体/直方体/円柱/円錐） ====== */
+function AddShapePanel({ draft, setDraft, onPlace, onCancel }) {
   if (!draft) return null;
 
-  const kind = draft.kind ?? 'channel';
-  const list = kind === 'channel' ? catalog.channels : catalog.angles;
-  const length = draft.length ?? 6000;
+  const type = draft.type;
+
+  function setField(key, value) {
+    setDraft((p) => ({ ...(p ?? {}), [key]: value }));
+  }
+
+  const isCube = type === 'cube';
+  const isBox = type === 'box';
+  const isCyl = type === 'cylinder';
+  const isCone = type === 'cone';
 
   return (
-    <div className="space-y-2 rounded-lg border p-2">
-      <div className="text-xs font-semibold">鋼材追加（mm）</div>
-      <div className="text-[11px] text-gray-500">Excelの規格から選んで長さを入力 →「配置」</div>
+    <div style={{ padding: 12, borderTop: '1px solid #333' }}>
+      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>追加：{type}</div>
 
-      <div className="flex gap-2">
-        <button
-          className={`flex-1 rounded border px-2 py-1 text-xs ${
-            kind === 'channel'
-              ? 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300'
-              : 'bg-white hover:bg-gray-50'
-          }`}
-          type="button"
-          onClick={() => {
-            const first = catalog.channels?.[0];
-            setDraft((d) => ({ ...d, kind: 'channel', name: first?.name ?? '', length }));
-          }}
-        >
-          チャンネル
-        </button>
-        <button
-          className={`flex-1 rounded border px-2 py-1 text-xs ${
-            kind === 'angle'
-              ? 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300'
-              : 'bg-white hover:bg-gray-50'
-          }`}
-          type="button"
-          onClick={() => {
-            const first = catalog.angles?.[0];
-            setDraft((d) => ({ ...d, kind: 'angle', name: first?.name ?? '', length }));
-          }}
-        >
-          Lアングル
-        </button>
-      </div>
+      {isCube ? (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>一辺 edge (mm)</div>
+            <input
+              type="number"
+              value={Number(draft.edge ?? MM_BASE)}
+              onChange={(e) => setField('edge', Number(e.target.value))}
+              style={{ width: '100%', padding: 8 }}
+            />
+          </div>
+        </div>
+      ) : null}
 
-      <div>
-        <div className="text-[10px] text-gray-500 mb-1">規格</div>
-        <select
-          className="w-full rounded border px-2 py-1 text-xs"
-          value={draft.name ?? ''}
-          onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-          disabled={disabled}
-        >
-          <option value="">{list.length ? '選択してください' : '（データがありません）'}</option>
-          {list.map((x) => (
-            <option key={x.name} value={x.name}>
-              {x.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      {isBox ? (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>サイズ W/H/D (mm)</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              {[0, 1, 2].map((i) => (
+                <input
+                  key={i}
+                  type="number"
+                  value={(draft.size ?? [MM_BASE, MM_BASE, MM_BASE])[i]}
+                  onChange={(e) => {
+                    const s = [...(draft.size ?? [MM_BASE, MM_BASE, MM_BASE])];
+                    s[i] = Number(e.target.value);
+                    setField('size', s);
+                  }}
+                  style={{ width: '100%', padding: 8 }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
-      <div>
-        <div className="text-[10px] text-gray-500 mb-1">長さ L(mm)</div>
-        <input
-          className="w-full rounded border px-2 py-1 text-xs"
-          type="number"
-          step="1"
-          value={length}
-          onChange={(e) => setDraft((d) => ({ ...d, length: num(e.target.value, 6000) }))}
-          disabled={disabled}
-        />
-      </div>
+      {isCyl || isCone ? (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>半径入力</div>
+            <select
+              value={draft.radiusMode ?? 'diameter'}
+              onChange={(e) => setField('radiusMode', e.target.value)}
+              style={{ width: '100%', padding: 8 }}
+            >
+              <option value="diameter">直径</option>
+              <option value="radius">半径</option>
+            </select>
+          </div>
 
-      <div className="flex gap-2">
-        <button
-          className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
-            disabled ? 'opacity-40 cursor-not-allowed' : ''
-          }`}
-          type="button"
-          onClick={() => {
-            if (disabled) return;
-            onPlace?.();
-          }}
-        >
+          {draft.radiusMode === 'radius' ? (
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>半径 r (mm)</div>
+              <input
+                type="number"
+                value={Number(draft.radius ?? MM_BASE / 2)}
+                onChange={(e) => setField('radius', Number(e.target.value))}
+                style={{ width: '100%', padding: 8 }}
+              />
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>直径 D (mm)</div>
+              <input
+                type="number"
+                value={Number(draft.diameter ?? MM_BASE)}
+                onChange={(e) => setField('diameter', Number(e.target.value))}
+                style={{ width: '100%', padding: 8 }}
+              />
+            </div>
+          )}
+
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>高さ h (mm)</div>
+            <input
+              type="number"
+              value={Number(draft.height ?? MM_BASE)}
+              onChange={(e) => setField('height', Number(e.target.value))}
+              style={{ width: '100%', padding: 8 }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button onClick={onPlace} style={{ flex: 1, padding: 10 }}>
           配置
         </button>
-        <button className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50" type="button" onClick={onCancel}>
+        <button onClick={onCancel} style={{ padding: 10 }}>
           キャンセル
         </button>
       </div>
+    </div>
+  );
+}
 
-      <div className="text-[11px] text-gray-500">※今は「外形サイズの箱」で仮配置（断面の本物形状は後で対応）</div>
+/** ====== Steel add panel（チャンネル/アングル以外も対応） ====== */
+function SteelAddPanel({ catalog, draft, setDraft, onPlace, onCancel, disabled }) {
+  if (!draft) return null;
+
+  // draft:
+  // {
+  //   kind: 'channel'|'angle'|'hbeam'|'pipe'|'roundbar'|'flatbar'|'squarepipe'|'expanded'|'checkered-plate',
+  //   name: string,
+  //   length: number,
+  //   width: number,
+  //   height: number
+  // }
+
+  const kind = draft.kind ?? 'channel';
+
+  const list =
+    kind === 'channel'
+      ? catalog?.channels ?? []
+      : kind === 'angle'
+      ? catalog?.angles ?? []
+      : kind === 'hbeam'
+      ? catalog?.hBeams ?? []
+      : kind === 'pipe'
+      ? catalog?.pipes ?? []
+      : kind === 'roundbar'
+      ? catalog?.roundBars ?? []
+      : kind === 'flatbar'
+      ? catalog?.flatBars ?? []
+      : kind === 'squarepipe'
+      ? catalog?.squarePipes ?? []
+      : kind === 'expanded'
+      ? catalog?.expands ?? []
+      : kind === 'checkered-plate'
+      ? catalog?.checkeredPlates ?? []
+      : [];
+
+  const selected = list.find((x) => x.name === draft.name) ?? list[0] ?? null;
+
+  function setField(key, value) {
+    setDraft((p) => ({ ...(p ?? {}), [key]: value }));
+  }
+
+  function ensureDefaultNameIfEmpty(nextKind) {
+    const nextList =
+      nextKind === 'channel'
+        ? catalog?.channels ?? []
+        : nextKind === 'angle'
+        ? catalog?.angles ?? []
+        : nextKind === 'hbeam'
+        ? catalog?.hBeams ?? []
+        : nextKind === 'pipe'
+        ? catalog?.pipes ?? []
+        : nextKind === 'roundbar'
+        ? catalog?.roundBars ?? []
+        : nextKind === 'flatbar'
+        ? catalog?.flatBars ?? []
+        : nextKind === 'squarepipe'
+        ? catalog?.squarePipes ?? []
+        : nextKind === 'expanded'
+        ? catalog?.expands ?? []
+        : nextKind === 'checkered-plate'
+        ? catalog?.checkeredPlates ?? []
+        : [];
+
+    const firstName = nextList?.[0]?.name ?? '';
+    setDraft((p) => {
+      const hasName = String(p?.name ?? '').trim().length > 0;
+      return {
+        ...(p ?? {}),
+        kind: nextKind,
+        name: hasName ? p.name : firstName,
+      };
+    });
+  }
+
+  function buildGeometryForDraft() {
+    const L = Number(draft.length ?? 6000);
+    const W = Number(draft.width ?? 1200);
+    const H = Number(draft.height ?? 600);
+
+    if (!selected) return null;
+
+    if (kind === 'channel') {
+      return buildChannelGeometry({
+        H: selected.H,
+        B: selected.B,
+        t1: selected.t1,
+        t2: selected.t2,
+        r1: selected.r1 ?? 0,
+        r2: selected.r2 ?? 0,
+        L,
+      });
+    }
+    if (kind === 'angle') {
+      return buildAngleGeometry({
+        A: selected.A,
+        B: selected.B,
+        t: selected.t,
+        r1: selected.r1 ?? 0,
+        r2: selected.r2 ?? 0,
+        L,
+      });
+    }
+    if (kind === 'hbeam') {
+      return buildHBeamGeometry({
+        H: selected.H,
+        B: selected.B,
+        t1: selected.t1,
+        t2: selected.t2,
+        r: selected.r ?? 0,
+        L,
+      });
+    }
+    if (kind === 'pipe') {
+      return buildPipeGeometry({
+        D: selected.D,
+        t: selected.t,
+        L,
+      });
+    }
+    if (kind === 'roundbar') {
+      return buildRoundBarGeometry({
+        D: selected.D,
+        L,
+      });
+    }
+    if (kind === 'flatbar') {
+      return buildFlatBarGeometry({
+        H: selected.H,
+        t: selected.t,
+        L,
+      });
+    }
+    if (kind === 'squarepipe') {
+      return buildSquarePipeGeometry({
+        H: selected.H,
+        B: selected.B,
+        t: selected.t,
+        L,
+      });
+    }
+    if (kind === 'expanded') {
+      return buildExpandedMetalGeometry({
+        SW: selected.SW ?? selected.sw ?? undefined,
+        LW: selected.LW ?? selected.lw ?? undefined,
+        T: selected.T ?? selected.t ?? undefined,
+        W: selected.W ?? selected.w ?? undefined,
+        width: W,
+        height: H,
+      });
+    }
+    if (kind === 'checkered-plate') {
+      return buildCheckeredPlateGeometry({
+        t: selected.t ?? 3.2,
+        width: W,
+        height: H,
+      });
+    }
+
+    return null;
+  }
+
+  function onClickPlace() {
+    const geo = buildGeometryForDraft();
+    if (!geo) return;
+
+    const L = Number(draft.length ?? 6000);
+    const W = Number(draft.width ?? 1200);
+    const Hh = Number(draft.height ?? 600);
+
+    const obj = {
+      kind: 'steel',
+      type:
+        kind === 'channel'
+          ? 'steel-channel'
+          : kind === 'angle'
+          ? 'steel-angle'
+          : kind === 'hbeam'
+          ? 'steel-hbeam'
+          : kind === 'pipe'
+          ? 'steel-pipe'
+          : kind === 'roundbar'
+          ? 'steel-roundbar'
+          : kind === 'flatbar'
+          ? 'steel-flatbar'
+          : kind === 'squarepipe'
+          ? 'steel-squarepipe'
+          : kind === 'expanded'
+          ? 'steel-expanded'
+          : kind === 'checkered-plate'
+          ? 'steel-checkered'
+          : 'steel',
+
+      name: selected?.name ?? draft.name ?? '',
+
+      // ✅ 再編集用に spec と dims を保存（EditorCanvas 側で再生成できる）
+      spec: { ...(selected ?? {}) },
+      dims:
+        kind === 'expanded' || kind === 'checkered-plate'
+          ? { width: W, height: Hh, t: selected?.t ?? selected?.T ?? null }
+          : { length: L },
+
+      // ✅ 生成済みジオメトリを渡す（EditorCanvas が __geometry 優先で描画する）
+      __geometry: geo,
+    };
+
+    onPlace(obj);
+  }
+
+  const isPlate = kind === 'expanded' || kind === 'checkered-plate';
+  const showLength = !isPlate;
+  const showWH = isPlate;
+
+  return (
+    <div style={{ padding: 12, borderTop: '1px solid #333' }}>
+      <div style={{ display: 'grid', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>鋼材種類</div>
+          <select
+            value={kind}
+            onChange={(e) => ensureDefaultNameIfEmpty(e.target.value)}
+            disabled={disabled}
+            style={{ width: '100%', padding: 8 }}
+          >
+            <option value="channel">チャンネル</option>
+            <option value="angle">アングル</option>
+            <option value="hbeam">H鋼</option>
+            <option value="pipe">ガス管</option>
+            <option value="roundbar">丸鋼</option>
+            <option value="flatbar">FB</option>
+            <option value="squarepipe">角パイプ</option>
+            <option value="expanded">エキスパンド</option>
+            <option value="checkered-plate">縞板</option>
+          </select>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>規格</div>
+          <select
+            value={draft.name ?? (selected?.name ?? '')}
+            onChange={(e) => setField('name', e.target.value)}
+            disabled={disabled || !list?.length}
+            style={{ width: '100%', padding: 8 }}
+          >
+            {(list ?? []).map((x) => (
+              <option key={x.name} value={x.name}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+          {!list?.length ? (
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>この種類のシートがExcelに無い/空です</div>
+          ) : null}
+        </div>
+
+        {showLength ? (
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>長さ L (mm)</div>
+            <input
+              type="number"
+              value={Number(draft.length ?? 6000)}
+              onChange={(e) => setField('length', Number(e.target.value))}
+              disabled={disabled}
+              style={{ width: '100%', padding: 8 }}
+            />
+          </div>
+        ) : null}
+
+        {showWH ? (
+          <>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>幅 width (mm)</div>
+              <input
+                type="number"
+                value={Number(draft.width ?? 1200)}
+                onChange={(e) => setField('width', Number(e.target.value))}
+                disabled={disabled}
+                style={{ width: '100%', padding: 8 }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>高さ height (mm)</div>
+              <input
+                type="number"
+                value={Number(draft.height ?? 600)}
+                onChange={(e) => setField('height', Number(e.target.value))}
+                disabled={disabled}
+                style={{ width: '100%', padding: 8 }}
+              />
+            </div>
+          </>
+        ) : null}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onClickPlace} disabled={disabled || !selected} style={{ flex: 1, padding: 10 }}>
+            配置
+          </button>
+          <button onClick={onCancel} disabled={disabled} style={{ padding: 10 }}>
+            キャンセル
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InspectorPanel({ obj, onChange }) {
+  const [posStr, setPosStr] = useState(['0', '0', '0']);
+
+  useEffect(() => {
+    if (!obj) return;
+    const p = obj.position ?? [0, 0, 0];
+    setPosStr([String(p[0] ?? 0), String(p[1] ?? 0), String(p[2] ?? 0)]);
+  }, [obj?.id, (obj?.position ?? []).join(',')]);
+
+  if (!obj) return null;
+
+  const pos = obj.position ?? [0, 0, 0];
+
+  const tryCommit = (i, s) => {
+    if (s === '' || s === '-' || s === '+' || s === '.' || s === '-.' || s === '+.') return;
+    const n = Number(s);
+    if (Number.isFinite(n)) {
+      const p = [...pos];
+      p[i] = n;
+      onChange?.({ position: p });
+    }
+  };
+
+  const clampCommitOnBlur = (i) => {
+    const s = posStr[i];
+    const n = Number(s);
+    if (!Number.isFinite(n)) {
+      const p = obj.position ?? [0, 0, 0];
+      setPosStr((prev) => {
+        const next = [...prev];
+        next[i] = String(p[i] ?? 0);
+        return next;
+      });
+      return;
+    }
+    const p = [...pos];
+    p[i] = n;
+    onChange?.({ position: p });
+  };
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="text-xs font-semibold">選択中：{obj.name ?? obj.type}</div>
+
+      <div>
+        <div className="text-[10px] text-gray-500 mb-1">位置 Position (mm)</div>
+        <div className="grid grid-cols-3 gap-2">
+          {['X', 'Y', 'Z'].map((label, i) => (
+            <div key={label}>
+              <div className="text-[10px] text-gray-400 mb-0.5">{label}</div>
+              <input
+                className="w-full rounded border px-2 py-1 text-xs"
+                type="text"
+                inputMode="decimal"
+                value={posStr[i]}
+                onChange={(e) => {
+                  const s = e.target.value;
+                  if (!/^[+\-]?\d*(\.\d*)?$/.test(s)) return;
+                  setPosStr((prev) => {
+                    const next = [...prev];
+                    next[i] = s;
+                    return next;
+                  });
+                  tryCommit(i, s);
+                }}
+                onBlur={() => clampCommitOnBlur(i)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {(obj.type === 'cube' || obj.type === 'box' || obj.type === 'fused') && (
+        <div>
+          <div className="text-[10px] text-gray-500 mb-1">サイズ Size (mm)</div>
+          <div className="grid grid-cols-3 gap-2">
+            {['W', 'H', 'D'].map((label, i) => (
+              <div key={label}>
+                <div className="text-[10px] text-gray-400 mb-0.5">{label}</div>
+                <input
+                  className="w-full rounded border px-2 py-1 text-xs"
+                  type="number"
+                  step="1"
+                  value={(obj.size ?? [MM_BASE, MM_BASE, MM_BASE])[i]}
+                  onChange={(e) => {
+                    const s = [...(obj.size ?? [MM_BASE, MM_BASE, MM_BASE])];
+                    s[i] = Math.max(1, Number(e.target.value) || 1);
+                    onChange?.({ size: s });
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(obj.type === 'cylinder' || obj.type === 'cone') && (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">半径 r(mm)</div>
+            <input
+              className="w-full rounded border px-2 py-1 text-xs"
+              type="number"
+              step="1"
+              value={obj.radius ?? MM_BASE / 2}
+              onChange={(e) =>
+                onChange?.({ radius: Math.max(1, Number(e.target.value) || 1) })
+              }
+            />
+          </div>
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">高さ h(mm)</div>
+            <input
+              className="w-full rounded border px-2 py-1 text-xs"
+              type="number"
+              step="1"
+              value={obj.height ?? MM_BASE}
+              onChange={(e) =>
+                onChange?.({ height: Math.max(1, Number(e.target.value) || 1) })
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ✅ steel：長さ L (mm) */}
+      {obj.type?.startsWith('steel-') &&
+      obj.type !== 'steel-expanded' &&
+      obj.type !== 'steel-checkered' ? (
+        <div>
+          <div className="text-[10px] text-gray-500 mb-1">長さ L(mm)</div>
+          <input
+            className="w-full rounded border px-2 py-1 text-xs"
+            type="number"
+            step="1"
+            value={Number(obj.dims?.length ?? 6000)}
+            onChange={(e) => {
+              const L = Math.max(1, Number(e.target.value) || 1);
+              onChange?.({
+                dims: { ...(obj.dims ?? {}), length: L },
+              });
+            }}
+          />
+        </div>
+      ) : null}
+
+      {/* ✅ steel：板（expanded / checkered） */}
+      {obj.type === 'steel-expanded' ||
+      obj.type === 'steel-checkered' ? (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">幅 W(mm)</div>
+            <input
+              className="w-full rounded border px-2 py-1 text-xs"
+              type="number"
+              step="1"
+              value={Number(obj.dims?.width ?? 1200)}
+              onChange={(e) => {
+                const W = Math.max(10, Number(e.target.value) || 10);
+                onChange?.({
+                  dims: { ...(obj.dims ?? {}), width: W },
+                });
+              }}
+            />
+          </div>
+          <div>
+            <div className="text-[10px] text-gray-500 mb-1">高さ H(mm)</div>
+            <input
+              className="w-full rounded border px-2 py-1 text-xs"
+              type="number"
+              step="1"
+              value={Number(obj.dims?.height ?? 600)}
+              onChange={(e) => {
+                const H = Math.max(10, Number(e.target.value) || 10);
+                onChange?.({
+                  dims: { ...(obj.dims ?? {}), height: H },
+                });
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
     </div>
   );
 }
@@ -129,8 +698,18 @@ export default function EditorPage() {
   const [currentTool, setCurrentTool] = useState('select');
   const [selectMode, setSelectMode] = useState('body');
 
+  // ✅ 頂点移動：1点目(頂点/中点)の記憶
+  const [snapMovePick, setSnapMovePick] = useState(null);
+
   const [showShadows, setShowShadows] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
+
+  // ===== 2D Sketch / Extrude =====
+  const [sketchMode, setSketchMode] = useState(null);
+  const [sketchEntities, setSketchEntities] = useState([]);
+
+  const [extrudeMode, setExtrudeMode] = useState(null);
+  const [extrudeLen, setExtrudeLen] = useState('1000');
 
   const AXIS_ACTIVE = 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300';
   const AXIS_INACTIVE = 'bg-white hover:bg-gray-50';
@@ -144,8 +723,12 @@ export default function EditorPage() {
   const [hoveredId, setHoveredId] = useState(null);
 
   const containerRef = useRef(null);
+  const canvasWrapRef = useRef(null);
+
+
+  // ====== Splitter Drag ======
   const draggingRef = useRef(false);
-  const dragTargetRef = useRef(null);
+  const dragTargetRef = useRef(null); // 'left' | 'right'
   const startXRef = useRef(0);
   const startLeftRef = useRef(DEFAULT_LEFT);
   const startRightRef = useRef(DEFAULT_RIGHT);
@@ -162,7 +745,18 @@ export default function EditorPage() {
   const leftVisible = leftWidth > 0;
   const rightVisible = rightWidth > 0;
 
-  const [steelCatalog, setSteelCatalog] = useState({ channels: [], angles: [] });
+  // ✅ 鋼材カタログ（全種類）
+  const [steelCatalog, setSteelCatalog] = useState({
+    channels: [],
+    angles: [],
+    hBeams: [],
+    pipes: [],
+    roundBars: [],
+    flatBars: [],
+    squarePipes: [],
+    expands: [],
+    checkeredPlates: [],
+  });
   const [steelLoadError, setSteelLoadError] = useState('');
   const [steelDraft, setSteelDraft] = useState(null);
 
@@ -172,12 +766,34 @@ export default function EditorPage() {
       try {
         const cat = await fetchSteelCatalog();
         if (!alive) return;
-        setSteelCatalog(cat ?? { channels: [], angles: [] });
+        setSteelCatalog(
+          cat ?? {
+            channels: [],
+            angles: [],
+            hBeams: [],
+            pipes: [],
+            roundBars: [],
+            flatBars: [],
+            squarePipes: [],
+            expands: [],
+            checkeredPlates: [],
+          }
+        );
         setSteelLoadError('');
       } catch (e) {
         if (!alive) return;
         setSteelLoadError(String(e?.message ?? e));
-        setSteelCatalog({ channels: [], angles: [] });
+        setSteelCatalog({
+          channels: [],
+          angles: [],
+          hBeams: [],
+          pipes: [],
+          roundBars: [],
+          flatBars: [],
+          squarePipes: [],
+          expands: [],
+          checkeredPlates: [],
+        });
       }
     })();
     return () => {
@@ -185,8 +801,21 @@ export default function EditorPage() {
     };
   }, []);
 
+  // ✅ Canvas領域内のホイールでページ側がスクロール/履歴ジェスチャー等を起こさない
+  useEffect(() => {
+    const el = canvasWrapRef.current;
+    if (!el) return;
+
+    const onWheel = (e) => {
+      e.preventDefault();
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+
   // ===== 平行移動（まとめ移動） =====
-  // ✅ 文字列で持つ（- が入力できるように）
   const [moveDelta, setMoveDelta] = useState({ x: '0', y: '0', z: '0' });
   const panBaseRef = useRef(new Map());
 
@@ -199,15 +828,38 @@ export default function EditorPage() {
     [moveDelta.x, moveDelta.y, moveDelta.z]
   );
 
+  // ✅ pan入力をリアルタイムで反映
+  useEffect(() => {
+    if (currentTool !== 'pan') return;
+    if (!panBaseRef.current || panBaseRef.current.size === 0) return;
+    livePanDelta(moveDeltaN);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTool, moveDeltaN.x, moveDeltaN.y, moveDeltaN.z]);
+
+  function livePanDelta(delta) {
+    const base = panBaseRef.current;
+    if (!base || base.size === 0) return;
+
+    setObjects((prev) =>
+      prev.map((o) => {
+        if (o.type === 'group') return o;
+        if (!base.has(o.id)) return o;
+        const b = base.get(o.id);
+        return { ...o, position: [b[0] + delta.x, b[1] + delta.y, b[2] + delta.z] };
+      })
+    );
+
+    setMoveDelta({ x: String(delta.x), y: String(delta.y), z: String(delta.z) });
+  }
+
   // ===== 回転（軸＋角度） =====
   const [rotAxis, setRotAxis] = useState('y');
-  const [rotAngleDeg, setRotAngleDeg] = useState('0'); // ✅ string
+  const [rotAngleDeg, setRotAngleDeg] = useState('0');
   const rotBaseRef = useRef(new Map());
-
   const rotAngleDegN = useMemo(() => numLoose(rotAngleDeg, 0), [rotAngleDeg]);
 
   // ===== 複製：平行 =====
-  const [dupMove, setDupMove] = useState({ x: '0', y: '0', z: '0' }); // ✅ string
+  const [dupMove, setDupMove] = useState({ x: '0', y: '0', z: '0' });
   const dupMoveN = useMemo(
     () => ({
       x: numLoose(dupMove.x, 0),
@@ -219,7 +871,7 @@ export default function EditorPage() {
 
   // ===== 複製：回転 =====
   const [dupRotAxis, setDupRotAxis] = useState('y');
-  const [dupRotDeg, setDupRotDeg] = useState('90'); // ✅ string
+  const [dupRotDeg, setDupRotDeg] = useState('90');
   const dupRotDegN = useMemo(() => numLoose(dupRotDeg, 0), [dupRotDeg]);
 
   // ===== 複製：ミラー =====
@@ -272,7 +924,28 @@ export default function EditorPage() {
 
   const [addDraft, setAddDraft] = useState(null);
 
+  function canSetLeft(newLeft) {
+    const total = containerRef.current?.clientWidth ?? 1200;
+    const canvas = total - newLeft - rightWidth - HIT * 2;
+    return canvas >= MIN_CANVAS;
+  }
+  function canSetRight(newRight) {
+    const total = containerRef.current?.clientWidth ?? 1200;
+    const canvas = total - leftWidth - newRight - HIT * 2;
+    return canvas >= MIN_CANVAS;
+  }
+
+  function ensureRightOpen() {
+    if (rightWidth > 0) return;
+    const back = lastRightOpenRef.current > 0 ? lastRightOpenRef.current : DEFAULT_RIGHT;
+    if (canSetRight(back)) setRightWidth(back);
+    else setRightWidth(DEFAULT_RIGHT);
+  }
+
   function openAdd(type) {
+    setSteelDraft(null);
+    ensureRightOpen();
+
     if (type === 'cube') {
       setAddDraft({ type: 'cube', edge: MM_BASE });
       return;
@@ -302,165 +975,6 @@ export default function EditorPage() {
       return;
     }
   }
-
-  function placeDraft() {
-    if (!addDraft?.type) return;
-
-    if (addDraft.type === 'cube') {
-      const e = Math.max(0.001, num(addDraft.edge, MM_BASE));
-      add('cube', { size: [e, e, e], position: [0, e / 2, 0] });
-      setAddDraft(null);
-      return;
-    }
-
-    if (addDraft.type === 'box') {
-      const s = addDraft.size ?? [MM_BASE, MM_BASE, MM_BASE];
-      const w = Math.max(0.001, num(s[0], MM_BASE));
-      const h = Math.max(0.001, num(s[1], MM_BASE));
-      const d = Math.max(0.001, num(s[2], MM_BASE));
-      add('box', { size: [w, h, d], position: [0, h / 2, 0] });
-      setAddDraft(null);
-      return;
-    }
-
-    if (addDraft.type === 'cylinder') {
-      const mode = addDraft.radiusMode ?? 'diameter';
-      const h = Math.max(0.001, num(addDraft.height, MM_BASE));
-      const r =
-        mode === 'radius'
-          ? Math.max(0.001, num(addDraft.radius, MM_BASE / 2))
-          : Math.max(0.001, num(addDraft.diameter, MM_BASE) / 2);
-
-      add('cylinder', { radius: r, height: h, position: [0, h / 2, 0] });
-      setAddDraft(null);
-      return;
-    }
-
-    if (addDraft.type === 'cone') {
-      const mode = addDraft.radiusMode ?? 'diameter';
-      const h = Math.max(0.001, num(addDraft.height, MM_BASE));
-      const r =
-        mode === 'radius'
-          ? Math.max(0.001, num(addDraft.radius, MM_BASE / 2))
-          : Math.max(0.001, num(addDraft.diameter, MM_BASE) / 2);
-
-      add('cone', { radius: r, height: h, position: [0, h / 2, 0] });
-      setAddDraft(null);
-      return;
-    }
-  }
-
-  function canSetLeft(newLeft) {
-    const total = containerRef.current?.clientWidth ?? 1200;
-    const canvas = total - newLeft - rightWidth - HIT * 2;
-    return canvas >= MIN_CANVAS;
-  }
-  function canSetRight(newRight) {
-    const total = containerRef.current?.clientWidth ?? 1200;
-    const canvas = total - leftWidth - newRight - HIT * 2;
-    return canvas >= MIN_CANVAS;
-  }
-
-  function openSteel() {
-    setAddDraft(null);
-    const first = steelCatalog.channels?.[0] ?? null;
-    setSteelDraft({ kind: 'channel', name: first?.name ?? '', length: 6000 });
-
-    if (rightWidth <= 0) {
-      const back = lastRightOpenRef.current > 0 ? lastRightOpenRef.current : DEFAULT_RIGHT;
-      if (canSetRight(back)) setRightWidth(back);
-      else setRightWidth(DEFAULT_RIGHT);
-    }
-  }
-
-  function placeSteel() {
-    if (!steelDraft) return;
-
-    const len = Math.max(1, num(steelDraft.length, 6000));
-    const kind = steelDraft.kind ?? 'channel';
-    const list = kind === 'channel' ? steelCatalog.channels : steelCatalog.angles;
-
-    const row =
-      list.find((r) => String(r.name).trim() === String(steelDraft.name).trim()) ?? list[0] ?? null;
-
-    if (!row) {
-      window.alert('規格が選ばれていません');
-      return;
-    }
-
-    if (kind === 'channel') {
-      const H = Math.max(1, num(row.H, 100));
-      const B = Math.max(1, num(row.B, 50));
-      add('steel-channel', {
-        name: `CH-${row.name}-${Math.round(len)}`,
-        steel: { kind, ...row, length: len },
-        size: [len, H, B],
-        position: [0, H / 2, 0],
-        color: '#bfbfbf',
-      });
-      setSteelDraft(null);
-      return;
-    }
-
-    if (kind === 'angle') {
-      const A = Math.max(1, num(row.A, 50));
-      const B = Math.max(1, num(row.B, 50));
-      add('steel-angle', {
-        name: `L-${row.name}-${Math.round(len)}`,
-        steel: { kind, ...row, length: len },
-        size: [len, A, B],
-        position: [0, A / 2, 0],
-        color: '#bfbfbf',
-      });
-      setSteelDraft(null);
-      return;
-    }
-  }
-
-  useEffect(() => {
-    if (historyRef.current.length > 0) return;
-
-    try {
-      const lw = Number(localStorage.getItem(LS_LEFT));
-      const rw = Number(localStorage.getItem(LS_RIGHT));
-      if (Number.isFinite(lw)) {
-        setLeftWidth(lw);
-        if (lw > 0) lastLeftOpenRef.current = lw;
-      }
-      if (Number.isFinite(rw)) {
-        setRightWidth(rw);
-        if (rw > 0) lastRightOpenRef.current = rw;
-      }
-    } catch {}
-
-    const firstId = uid();
-    const initH = MM_BASE;
-    const init = [
-      {
-        id: firstId,
-        type: 'box',
-        name: 'box1',
-        size: [MM_BASE * 2, initH, MM_BASE],
-        position: [0, initH / 2, 0],
-        pivot: [0, 0, 0],
-        rotation: [0, 0, 0],
-        color: '#bfbfbf',
-      },
-    ];
-
-    setObjects(init);
-    historyRef.current = [init];
-
-    setSelectedIds([firstId]);
-    setPrimaryId(firstId);
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_LEFT, String(leftWidth));
-      localStorage.setItem(LS_RIGHT, String(rightWidth));
-    } catch {}
-  }, [leftWidth, rightWidth]);
 
   function commit(nextObjects) {
     historyRef.current.push(nextObjects);
@@ -500,19 +1014,24 @@ export default function EditorPage() {
 
   function add(type, data = {}) {
     const id = uid();
+
+    const pivot = data.pivot ?? defaultPivotFor(type, data);
+    const position = data.position ?? defaultPositionFor(type, data);
+
     const next = [
       {
         id,
         type,
         name: nextNameForType(type),
-        position: [0, MM_BASE / 2, 0],
-        pivot: [0, 0, 0],
+        position,
+        pivot,
         rotation: [0, 0, 0],
         color: '#bfbfbf',
         ...data,
       },
       ...objects,
     ];
+
     commit(next);
 
     setSelectedIds([id]);
@@ -520,6 +1039,161 @@ export default function EditorPage() {
     setCurrentTool('select');
     setSelectMode('body');
   }
+
+  function placeDraft() {
+    if (!addDraft?.type) return;
+
+    if (addDraft.type === 'cube') {
+      const e = Math.max(1, num(addDraft.edge, MM_BASE));
+      add('cube', { size: [e, e, e], position: [0, 0, 0] });
+      setAddDraft(null);
+      return;
+    }
+
+    if (addDraft.type === 'box') {
+      const s = addDraft.size ?? [MM_BASE, MM_BASE, MM_BASE];
+      const w = Math.max(1, num(s[0], MM_BASE));
+      const h = Math.max(1, num(s[1], MM_BASE));
+      const d = Math.max(1, num(s[2], MM_BASE));
+      add('box', { size: [w, h, d], position: [0, 0, 0] });
+      setAddDraft(null);
+      return;
+    }
+
+    if (addDraft.type === 'cylinder') {
+      const mode = addDraft.radiusMode ?? 'diameter';
+      const h = Math.max(1, num(addDraft.height, MM_BASE));
+      const r = mode === 'radius' ? Math.max(1, num(addDraft.radius, MM_BASE / 2)) : Math.max(1, num(addDraft.diameter, MM_BASE) / 2);
+      add('cylinder', { radius: r, height: h, position: [0, 0, 0] });
+      setAddDraft(null);
+      return;
+    }
+
+    if (addDraft.type === 'cone') {
+      const mode = addDraft.radiusMode ?? 'diameter';
+      const h = Math.max(1, num(addDraft.height, MM_BASE));
+      const r = mode === 'radius' ? Math.max(1, num(addDraft.radius, MM_BASE / 2)) : Math.max(1, num(addDraft.diameter, MM_BASE) / 2);
+      add('cone', { radius: r, height: h, position: [0, 0, 0] });
+      setAddDraft(null);
+      return;
+    }
+  }
+
+  // ✅ 新：SteelAddPanel（全種類）を開く
+  function openSteel() {
+    setAddDraft(null);
+    ensureRightOpen();
+
+    const first = steelCatalog.channels?.[0] ?? null;
+    setSteelDraft({ kind: 'channel', name: first?.name ?? '', length: 6000, width: 1200, height: 600 });
+  }
+
+  // ✅ 新：SteelAddPanel から obj を受け取って add する（チャンネル/アングル以外もOK）
+  function placeSteelObj(objFromPanel) {
+    if (!objFromPanel) return;
+
+    const type = objFromPanel.type;
+    const spec = objFromPanel.spec ?? {};
+    const dims = objFromPanel.dims ?? {};
+    const col = objFromPanel.color ?? '#bfbfbf';
+
+    // 外形箱サイズは “表示/ピボットのため” に入れておく（EditorCanvas は __geometry を優先で描画）
+    let size = [MM_BASE, MM_BASE, MM_BASE];
+
+    if (type === 'steel-channel') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      size = [L, Math.max(1, num(spec.H, 100)), Math.max(1, num(spec.B, 50))];
+    } else if (type === 'steel-angle') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      size = [L, Math.max(1, num(spec.A, 50)), Math.max(1, num(spec.B, 50))];
+    } else if (type === 'steel-hbeam') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      size = [L, Math.max(1, num(spec.H, 200)), Math.max(1, num(spec.B, 100))];
+    } else if (type === 'steel-pipe') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      const D = Math.max(1, num(spec.D, 100));
+      size = [D, L, D];
+    } else if (type === 'steel-roundbar') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      const D = Math.max(1, num(spec.D, 50));
+      size = [D, L, D];
+    } else if (type === 'steel-flatbar') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      const H = Math.max(1, num(spec.H, 50));
+      const t = Math.max(1, num(spec.t, 6));
+      size = [L, H, t];
+    } else if (type === 'steel-squarepipe') {
+      const L = Math.max(1, num(dims.length, num(spec.length, 6000)));
+      const H = Math.max(1, num(spec.H, 75));
+      const B = Math.max(1, num(spec.B, 75));
+      size = [L, H, B];
+    } else if (type === 'steel-expanded' || type === 'steel-checkered') {
+      const w = Math.max(10, num(dims.width, 1200));
+      const h = Math.max(10, num(dims.height, 600));
+      const t = Math.max(1, num(dims.t ?? spec.t ?? spec.T, 3));
+      size = [w, t, h];
+    }
+
+    add(type, {
+      name: objFromPanel.name ?? type,
+      spec,
+      dims,
+      __geometry: objFromPanel.__geometry,
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      color: col,
+      size,
+      pivot: defaultPivotFor(type, { size }),
+    });
+
+    setSteelDraft(null);
+  }
+
+  useEffect(() => {
+    if (historyRef.current.length > 0) return;
+
+    try {
+      const lw = Number(localStorage.getItem(LS_LEFT));
+      const rw = Number(localStorage.getItem(LS_RIGHT));
+      if (Number.isFinite(lw)) {
+        setLeftWidth(lw);
+        if (lw > 0) lastLeftOpenRef.current = lw;
+      }
+      if (Number.isFinite(rw)) {
+        setRightWidth(rw);
+        if (rw > 0) lastRightOpenRef.current = rw;
+      }
+    } catch {}
+
+    const firstId = uid();
+    const initH = MM_BASE;
+    const initSize = [MM_BASE * 2, initH, MM_BASE];
+    const init = [
+      {
+        id: firstId,
+        type: 'box',
+        name: 'box1',
+        size: initSize,
+        position: [0, 0, 0],
+        pivot: defaultPivotFor('box', { size: initSize }),
+        rotation: [0, 0, 0],
+        color: '#bfbfbf',
+      },
+    ];
+
+    setObjects(init);
+    historyRef.current = [init];
+
+    setSelectedIds([firstId]);
+    setPrimaryId(firstId);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_LEFT, String(leftWidth));
+      localStorage.setItem(LS_RIGHT, String(rightWidth));
+    } catch {}
+  }, [leftWidth, rightWidth]);
 
   function selectSingle(id) {
     if (!id) {
@@ -603,7 +1277,6 @@ export default function EditorPage() {
   }
 
   const primaryObject = useMemo(() => shapes.find((o) => o.id === primaryId) ?? null, [shapes, primaryId]);
-  const singleSelection = selectedIds.length === 1 && !!primaryObject;
 
   function updateObject(id, patch) {
     const next = objects.map((o) => (o.id === id ? { ...o, ...patch } : o));
@@ -615,19 +1288,14 @@ export default function EditorPage() {
     updateObject(primaryId, patch);
   }
 
-  function setPrimaryXYZ(axis, value) {
-    if (!primaryObject) return;
-    const p = primaryObject.position ?? [0, 0, 0];
-    const x = axis === 'x' ? num(value, p[0]) : p[0];
-    const y = axis === 'y' ? num(value, p[1]) : p[1];
-    const z = axis === 'z' ? num(value, p[2]) : p[2];
-    updatePrimary({ position: [x, y, z] });
+  function livePatchObject(id, patch) {
+    setObjects((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
   }
 
   function setPivotForPrimary(newPivotLocal) {
     if (!primaryObject) return;
     const oldPivot = primaryObject.pivot ?? [0, 0, 0];
-    const pos = primaryObject.position ?? [0, MM_BASE / 2, 0];
+    const pos = primaryObject.position ?? [0, 0, 0];
 
     const dx = newPivotLocal[0] - oldPivot[0];
     const dy = newPivotLocal[1] - oldPivot[1];
@@ -754,38 +1422,79 @@ export default function EditorPage() {
     const srcShapes = shapes.filter((s) => shapeIds.includes(s.id));
     if (srcShapes.length < 2) return;
 
-    let sx = 0,
-      sy = 0,
-      sz = 0;
-    for (const s of srcShapes) {
-      const p = s.position ?? [0, 0, 0];
-      sx += p[0];
-      sy += p[1];
-      sz += p[2];
-    }
-    const basePos = [sx / srcShapes.length, sy / srcShapes.length, sz / srcShapes.length];
+    const base = shapes.find((s) => s.id === primaryId) ?? srcShapes[0];
+    if (!base) return;
 
     const fusedId = uid();
     const fusedName = `fused${fusedCountRef.current++}`;
+    const color = base.color ?? '#bfbfbf';
+
+    const fusedPos = base.position ?? [0, 0, 0];
+    const fusedRot = base.rotation ?? [0, 0, 0];
+    const fusedPivot = base.pivot ?? [0, 0, 0];
+
+    const fusedObj = {
+      id: fusedId,
+      type: 'fused',
+      name: fusedName,
+      position: [fusedPos[0], fusedPos[1], fusedPos[2]],
+      rotation: [fusedRot[0] ?? 0, fusedRot[1] ?? 0, fusedRot[2] ?? 0],
+      pivot: [fusedPivot[0], fusedPivot[1], fusedPivot[2]],
+      color,
+      size: base.size ?? [MM_BASE, MM_BASE, MM_BASE],
+      sources: [],
+    };
+
+    const qF = new THREE.Quaternion().setFromEuler(new THREE.Euler(fusedRot[0] ?? 0, fusedRot[1] ?? 0, fusedRot[2] ?? 0));
+    const qFInv = qF.clone().invert();
+
+    const vFPos = new THREE.Vector3(fusedPos[0] ?? 0, fusedPos[1] ?? 0, fusedPos[2] ?? 0);
+    const fusedMeshOffset = new THREE.Vector3(-(fusedPivot[0] ?? 0), -(fusedPivot[1] ?? 0), -(fusedPivot[2] ?? 0));
 
     const sources = srcShapes.map((s) => {
       const p = s.position ?? [0, 0, 0];
       const r = s.rotation ?? [0, 0, 0];
+      const pv = s.pivot ?? [0, 0, 0];
+
+      const vSPos = new THREE.Vector3(p[0] ?? 0, p[1] ?? 0, p[2] ?? 0);
+      const qS = new THREE.Quaternion().setFromEuler(new THREE.Euler(r[0] ?? 0, r[1] ?? 0, r[2] ?? 0));
+
+      const qRel = qFInv.clone().multiply(qS);
+
+      const srcMeshOffset = new THREE.Vector3(-(pv[0] ?? 0), -(pv[1] ?? 0), -(pv[2] ?? 0));
+
+      const localPos = vSPos
+        .clone()
+        .sub(vFPos)
+        .applyQuaternion(qFInv)
+        .add(srcMeshOffset.clone().applyQuaternion(qRel))
+        .sub(fusedMeshOffset)
+        .sub(srcMeshOffset);
+
+      const eRel = new THREE.Euler().setFromQuaternion(qRel, 'XYZ');
 
       return {
+        id: s.id,
         type: s.type,
         size: s.size,
         radius: s.radius,
         height: s.height,
         steel: s.steel,
-        localPosition: [p[0] - basePos[0], p[1] - basePos[1], p[2] - basePos[2]],
-        localRotation: [r[0] ?? 0, r[1] ?? 0, r[2] ?? 0],
+        spec: s.spec,
+        dims: s.dims,
+        __geometry: s.__geometry,
+        color: s.color,
+        pivot: s.pivot,
+        localPosition: [localPos.x, localPos.y, localPos.z],
+        localRotation: [eRel.x, eRel.y, eRel.z],
       };
     });
 
+    fusedObj.sources = sources;
+
     const delSet = new Set(shapeIds);
 
-    const next = objects
+    const tmp = objects
       .map((o) => {
         if (o.type === 'group') {
           const kids = (o.children ?? []).filter((cid) => !delSet.has(cid));
@@ -799,21 +1508,17 @@ export default function EditorPage() {
         return true;
       });
 
-    const color = srcShapes[0]?.color ?? '#bfbfbf';
+    const groupExists = (gid) => tmp.some((x) => x.type === 'group' && x.id === gid);
 
-    const fusedObj = {
-      id: fusedId,
-      type: 'fused',
-      name: fusedName,
-      position: basePos,
-      pivot: [0, 0, 0],
-      rotation: [0, 0, 0],
-      color,
-      sources,
-    };
+    const next = tmp.map((o) => {
+      if (o.type !== 'group' && o.parentGroupId && !groupExists(o.parentGroupId)) {
+        const { parentGroupId, ...rest } = o;
+        return rest;
+      }
+      return o;
+    });
 
-    const withFused = [fusedObj, ...next];
-    commit(withFused);
+    commit([fusedObj, ...next]);
 
     setSelectedIds([fusedId]);
     setPrimaryId(fusedId);
@@ -831,19 +1536,6 @@ export default function EditorPage() {
       }
     }
     panBaseRef.current = m;
-  }
-
-  function previewPanDelta(delta) {
-    const base = panBaseRef.current;
-    if (!base || base.size === 0) return;
-    setObjects((prev) =>
-      prev.map((o) => {
-        if (o.type === 'group') return o;
-        if (!base.has(o.id)) return o;
-        const b = base.get(o.id);
-        return { ...o, position: [b[0] + delta.x, b[1] + delta.y, b[2] + delta.z] };
-      })
-    );
   }
 
   function commitPanDelta(delta) {
@@ -868,12 +1560,6 @@ export default function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTool, selectedIds.join('|')]);
 
-  useEffect(() => {
-    if (currentTool !== 'pan') return;
-    previewPanDelta(moveDeltaN);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [moveDeltaN.x, moveDeltaN.y, moveDeltaN.z, currentTool]);
-
   function rebuildRotBase() {
     const m = new Map();
     const shapeIds = expandSelectionToShapes(selectedIds);
@@ -884,27 +1570,6 @@ export default function EditorPage() {
       }
     }
     rotBaseRef.current = m;
-  }
-
-  function previewRotate(angleDeg) {
-    const base = rotBaseRef.current;
-    if (!base || base.size === 0) return;
-
-    const a = degToRad(angleDeg);
-    const axis = rotAxis;
-
-    setObjects((prev) =>
-      prev.map((o) => {
-        if (o.type === 'group') return o;
-        if (!base.has(o.id)) return o;
-        const b = base.get(o.id);
-        const r = [b[0], b[1], b[2]];
-        if (axis === 'x') r[0] = b[0] + a;
-        if (axis === 'y') r[1] = b[1] + a;
-        if (axis === 'z') r[2] = b[2] + a;
-        return { ...o, rotation: r };
-      })
-    );
   }
 
   function commitRotate(angleDeg) {
@@ -943,25 +1608,35 @@ export default function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTool, selectedIds.join('|')]);
 
-  useEffect(() => {
-    if (currentTool !== 'rotate') return;
-    previewRotate(rotAngleDegN);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rotAngleDegN, rotAxis, currentTool]);
-
   function makeCopyName(baseName, index) {
     const n = baseName?.trim() ? baseName.trim() : 'object';
     return `${n}_copy${index}`;
   }
 
   function cloneObject(o, patch = {}, copyIndex = 1) {
-    return {
-      ...structuredClone(o),
-      id: uid(),
-      name: makeCopyName(o.name ?? o.type, copyIndex),
-      ...patch,
-    };
+  // ✅ structuredClone は BufferGeometry 等で落ちるので使わない
+  const base = { ...o };
+
+  // ✅ 複製時はジオメトリを状態に持ち回さない（再生成できるので不要）
+  delete base.__geometry;
+
+  // fused の中にも __geometry が潜むので消す
+  if (base.type === 'fused' && Array.isArray(base.sources)) {
+    base.sources = base.sources.map((s) => {
+      const ss = { ...s };
+      delete ss.__geometry;
+      return ss;
+    });
   }
+
+  return {
+    ...base,
+    id: uid(),
+    name: makeCopyName(o.name ?? o.type, copyIndex),
+    ...patch,
+  };
+}
+
 
   function duplicateTranslate(dx, dy, dz) {
     const shapeIds = expandSelectionToShapes(selectedIds);
@@ -970,11 +1645,7 @@ export default function EditorPage() {
     const src = shapes.filter((o) => shapeIds.includes(o.id));
     const copies = src.map((o, i) => {
       const p = o.position ?? [0, 0, 0];
-      return cloneObject(
-        o,
-        { position: [p[0] + dx, p[1] + dy, p[2] + dz], parentGroupId: undefined },
-        i + 1
-      );
+      return cloneObject(o, { position: [p[0] + dx, p[1] + dy, p[2] + dz], parentGroupId: undefined }, i + 1);
     });
 
     const next = [...copies, ...objects];
@@ -1080,54 +1751,31 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedIds, objects]);
 
+  // ===== Splitter Drag start =====
   function startDrag(which, e) {
     e.preventDefault();
+    e.stopPropagation?.();
+
     draggingRef.current = true;
     dragTargetRef.current = which;
     startXRef.current = e.clientX;
     startLeftRef.current = leftWidth;
     startRightRef.current = rightWidth;
+
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
   }
 
-  useEffect(() => {
-    const onMove = (e) => {
-      if (!draggingRef.current) return;
-      const dx = e.clientX - startXRef.current;
-
-      if (dragTargetRef.current === 'left') {
-        const nextLeft = Math.max(0, startLeftRef.current + dx);
-        if (canSetLeft(nextLeft)) {
-          setLeftWidth(nextLeft);
-          if (nextLeft > 0) lastLeftOpenRef.current = nextLeft;
-        }
-      }
-
-      if (dragTargetRef.current === 'right') {
-        const nextRight = Math.max(0, startRightRef.current - dx);
-        if (canSetRight(nextRight)) {
-          setRightWidth(nextRight);
-          if (nextRight > 0) lastRightOpenRef.current = nextRight;
-        }
-      }
-    };
-
-    const onUp = () => {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
-      dragTargetRef.current = null;
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-    };
-
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [leftWidth, rightWidth]);
+  function endDrag(e) {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    dragTargetRef.current = null;
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    e?.currentTarget?.releasePointerCapture?.(e.pointerId);
+  }
 
   function toggleCollapseLeft() {
     if (leftWidth <= 0) {
@@ -1156,12 +1804,6 @@ export default function EditorPage() {
     lastLeftOpenRef.current = DEFAULT_LEFT;
     lastRightOpenRef.current = DEFAULT_RIGHT;
   }
-  function toggleLeftVisible() {
-    toggleCollapseLeft();
-  }
-  function toggleRightVisible() {
-    toggleCollapseRight();
-  }
 
   const ResizeArrows = (
     <svg width="44" height="12" viewBox="0 0 44 12" aria-hidden="true">
@@ -1173,17 +1815,41 @@ export default function EditorPage() {
     </svg>
   );
 
-  function Splitter({ onMouseDown, onDoubleClick }) {
+  function Splitter({ which, onDoubleClick }) {
+    const hidden = (which === 'left' && leftWidth <= 0) || (which === 'right' && rightWidth <= 0);
+
     return (
       <div
-        className="relative select-none"
+        className={`relative select-none flex-shrink-0 z-20 ${hidden ? 'opacity-60' : ''}`}
         style={{ width: HIT }}
-        onMouseDown={onMouseDown}
+        title="ドラッグでサイズ変更 / ダブルクリックで折りたたみ"
+        onPointerDown={(e) => startDrag(which, e)}
+        onPointerMove={(e) => {
+          if (!draggingRef.current) return;
+          const dx = e.clientX - startXRef.current;
+
+          if (dragTargetRef.current === 'left') {
+            const nextLeft = Math.max(0, startLeftRef.current + dx);
+            if (canSetLeft(nextLeft)) {
+              setLeftWidth(nextLeft);
+              if (nextLeft > 0) lastLeftOpenRef.current = nextLeft;
+            }
+          }
+
+          if (dragTargetRef.current === 'right') {
+            const nextRight = Math.max(0, startRightRef.current - dx);
+            if (canSetRight(nextRight)) {
+              setRightWidth(nextRight);
+              if (nextRight > 0) lastRightOpenRef.current = nextRight;
+            }
+          }
+        }}
+        onPointerUp={(e) => endDrag(e)}
+        onPointerCancel={(e) => endDrag(e)}
         onDoubleClick={(e) => {
           e.preventDefault();
           onDoubleClick?.();
         }}
-        title="ドラッグでサイズ変更 / ダブルクリックで折りたたみ"
       >
         <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-gray-300" />
         <div className="group absolute inset-0 cursor-col-resize">
@@ -1197,9 +1863,7 @@ export default function EditorPage() {
 
   const QuickBtn = ({ deg }) => (
     <button
-      className={`rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
-        selectedIds.length === 0 ? 'opacity-40 cursor-not-allowed' : ''
-      }`}
+      className={`rounded border px-2 py-1 text-xs hover:bg-gray-50 ${selectedIds.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
       onClick={() => {
         if (selectedIds.length === 0) return;
         quickRotate(deg);
@@ -1221,63 +1885,105 @@ export default function EditorPage() {
       if (s?.parentGroupId && groupById.get(s.parentGroupId)) return true;
     }
     return false;
-  }, [selectedIds.join('|'), shapes, groups]);
+  }, [selectedIds.join('|'), shapes, groups, groupById]);
 
-  function setPrimaryBoxSize(axisIndex, value) {
-    if (!primaryObject) return;
-    const s = primaryObject.size ?? [MM_BASE, MM_BASE, MM_BASE];
-    const next = [s[0], s[1], s[2]];
-    next[axisIndex] = Math.max(0.001, num(value, s[axisIndex]));
-    updatePrimary({ size: next });
+  function startSketch2D() {
+    setSketchMode({ type: 'sketch2d', step: 'pickFace', objId: null, frame: null, tool: 'line' });
+    setSketchEntities([]);
+    ensureRightOpen();
+    setCurrentTool('sketch2d');
   }
-  function setPrimaryCubeEdge(value) {
-    if (!primaryObject) return;
-    const e = Math.max(0.001, num(value, MM_BASE));
-    updatePrimary({ size: [e, e, e] });
+
+  function exitSketch2D() {
+    setSketchMode(null);
+    setCurrentTool('select');
   }
-  function setPrimaryHeight(value) {
-    if (!primaryObject) return;
-    updatePrimary({ height: Math.max(0.001, num(value, primaryObject.height ?? MM_BASE)) });
+
+  function deleteLastSketchEntity() {
+    setSketchEntities((prev) => prev.slice(0, Math.max(0, prev.length - 1)));
   }
-  function setPrimaryRadius(value) {
-    if (!primaryObject) return;
-    updatePrimary({ radius: Math.max(0.001, num(value, primaryObject.radius ?? MM_BASE / 2)) });
+
+  // ✅ Extrude：直前Sketchのframeを流用
+  function startExtrude() {
+    ensureRightOpen();
+
+    const canReuseFrame = !!sketchMode?.frame && (sketchEntities ?? []).length >= 3;
+
+    if (canReuseFrame) {
+      const loops = detectClosedLoops(sketchEntities ?? []);
+      const first = loops[0] ?? null;
+      setExtrudeMode({
+        step: 'pickRegion',
+        objId: sketchMode?.objId ?? null,
+        frame: sketchMode.frame,
+        loops,
+        selectedLoopId: first?.id ?? null,
+        selectedLoop: first ?? null,
+      });
+      setExtrudeLen('1000');
+      setCurrentTool('extrude');
+      return;
+    }
+
+    setExtrudeMode({ step: 'pickFace', objId: null, frame: null, loops: [], selectedLoopId: null, selectedLoop: null });
+    setExtrudeLen('1000');
+    setCurrentTool('extrude');
+  }
+
+  function exitExtrude() {
+    setExtrudeMode(null);
+    setCurrentTool('select');
   }
 
   return (
-    <div className="h-[calc(100vh-64px)] flex flex-col">
-      <EditorToolbar
-        currentTool={currentTool}
-        setTool={setCurrentTool}
-        selectMode={selectMode}
-        setSelectMode={setSelectMode}
-        onAddCube={() => openAdd('cube')}
-        onAddBox={() => openAdd('box')}
-        onAddCylinder={() => openAdd('cylinder')}
-        onAddCone={() => openAdd('cone')}
-        onOpenSteelPanel={openSteel}
-        onDeleteSelected={deleteSelected}
-        canDelete={selectedIds.length > 0}
-        onResetLayout={resetLayout}
-        leftVisible={leftVisible}
-        rightVisible={rightVisible}
-        onToggleLeft={toggleLeftVisible}
-        onToggleRight={toggleRightVisible}
-        onGroupSelected={groupSelected}
-        onUngroupSelected={ungroupSelected}
-        onFuseSelected={fuseSelected}
-        canGroup={canGroup}
-        canUngroup={canUngroup}
-        canFuse={canFuse}
-        showShadows={showShadows}
-        showGrid={showGrid}
-        onToggleShadows={() => setShowShadows((v) => !v)}
-        onToggleGrid={() => setShowGrid((v) => !v)}
-      />
+    <div className="h-screen flex flex-col min-h-0">
+      <div className="shrink-0 sticky top-0 z-40 bg-white border-b">
+        <EditorToolbar
+          currentTool={currentTool}
+          setTool={(t) => {
+            setCurrentTool(t);
+    if (t === 'vertex-move') setSelectMode('vertex');
+    if (t !== 'vertex-move' && selectMode === 'vertex') setSelectMode('body');
+            if (t !== 'sketch2d' && sketchMode) setSketchMode(null);
+            if (t !== 'extrude' && extrudeMode) setExtrudeMode(null);
+            if (t !== 'vertex-move') setSnapMovePick(null);
+
+          }}
+          selectMode={selectMode}
+          setSelectMode={setSelectMode}
+          onAddCube={() => openAdd('cube')}
+          onAddBox={() => openAdd('box')}
+          onAddCylinder={() => openAdd('cylinder')}
+          onAddCone={() => openAdd('cone')}
+          onOpenSteelPanel={openSteel}
+          onDeleteSelected={deleteSelected}
+          canDelete={selectedIds.length > 0}
+          onResetLayout={resetLayout}
+          leftVisible={leftVisible}
+          rightVisible={rightVisible}
+          onToggleLeft={toggleCollapseLeft}
+          onToggleRight={toggleCollapseRight}
+          onGroupSelected={groupSelected}
+          onUngroupSelected={ungroupSelected}
+          onFuseSelected={fuseSelected}
+          canGroup={canGroup}
+          canUngroup={canUngroup}
+          canFuse={canFuse}
+          showShadows={showShadows}
+          showGrid={showGrid}
+          onToggleShadows={() => setShowShadows((v) => !v)}
+          onToggleGrid={() => setShowGrid((v) => !v)}
+          onStartSketch2D={startSketch2D}
+          onStartExtrude={startExtrude}
+        />
+      </div>
 
       <div ref={containerRef} className="flex-1 flex min-h-0">
         {/* 左：構成ツリー */}
-        <aside className="border-r bg-white flex flex-col min-h-0 overflow-hidden" style={{ width: leftWidth }}>
+        <aside
+          className="border-r bg-white flex flex-col min-h-0 overflow-hidden"
+          style={{ width: leftWidth, display: leftWidth > 0 ? 'flex' : 'none' }}
+        >
           <div className="border-b px-3 py-2 text-sm font-semibold truncate">構成ツリー</div>
 
           <div className="flex-1 overflow-auto p-2 space-y-2 text-xs">
@@ -1297,6 +2003,7 @@ export default function EditorPage() {
                       renameObject(g.id);
                     }}
                     title="右クリックで名前変更 / クリックでグループ選択"
+                    type="button"
                   >
                     <div className="font-semibold truncate">📦 {label}</div>
                     <div className="text-gray-500 truncate">group ({kids.length})</div>
@@ -1322,6 +2029,7 @@ export default function EditorPage() {
                             renameObject(s.id);
                           }}
                           title="右クリックで名前変更 / クリックするとグループ全体が選択されます"
+                          type="button"
                         >
                           <div className="truncate">- {nm}</div>
                         </button>
@@ -1352,6 +2060,7 @@ export default function EditorPage() {
                       renameObject(o.id);
                     }}
                     title="右クリックで名前変更 / Shiftで複数選択"
+                    type="button"
                   >
                     <div className="font-semibold truncate">
                       {i + 1}. {label} {primary ? '(primary)' : ''}
@@ -1375,10 +2084,10 @@ export default function EditorPage() {
           </div>
         </aside>
 
-        <Splitter onMouseDown={(e) => startDrag('left', e)} onDoubleClick={toggleCollapseLeft} />
+        <Splitter which="left" onDoubleClick={toggleCollapseLeft} />
 
         {/* 中央：Canvas */}
-        <div className="flex-1 min-h-0 bg-gray-100">
+        <div ref={canvasWrapRef} className="flex-1 min-h-0 bg-gray-100">
           <EditorCanvas
             objects={objects}
             selectedIds={expandedShapeSelection.length ? expandedShapeSelection : selectedIds}
@@ -1388,28 +2097,124 @@ export default function EditorPage() {
             onHover={setHoveredId}
             currentTool={currentTool}
             selectMode={selectMode}
+            snapMovePick={snapMovePick}
+            onSnapMovePickChange={setSnapMovePick}
             onSetPivotLocal={setPivotForPrimary}
             onCommitMove={(id, pos) => updateObject(id, { position: pos })}
             onLiveMove={(id, pos) => {
               setObjects((prev) => prev.map((oo) => (oo.id === id ? { ...oo, position: pos } : oo)));
             }}
-            onLivePanDelta={(delta) => setMoveDelta({ x: String(delta.x), y: String(delta.y), z: String(delta.z) })}
+            onLiveScale={(id, patch) => livePatchObject(id, patch)}
+            onCommitScale={(id, patch) => updateObject(id, patch)}
+            onLivePanDelta={(delta) => livePanDelta(delta)}
             onCommitPanDelta={(delta) => commitPanDelta(delta)}
             showShadows={showShadows}
             showGrid={showGrid}
+            sketchMode={sketchMode}
+            onSketchModeChange={(v) => {
+              if (!v) return;
+              if (v.type === 'sketch2d') {
+                setSketchMode((prev) => ({ ...(prev ?? {}), ...v, tool: prev?.tool ?? 'line' }));
+              }
+            }}
+            sketchEntities={sketchEntities}
+            onSketchEntitiesChange={setSketchEntities}
+            extrudeMode={extrudeMode}
+            onExtrudeModeChange={(v) => {
+              if (!v) return;
+
+              if (v.step === 'pickRegion' && v.frame) {
+                const loops = detectClosedLoops(sketchEntities ?? []);
+                const first = loops[0] ?? null;
+                setExtrudeMode((prev) => ({
+                  ...(prev ?? {}),
+                  step: 'pickRegion',
+                  objId: v.objId ?? prev?.objId ?? null,
+                  frame: v.frame,
+                  loops,
+                  selectedLoopId: first?.id ?? prev?.selectedLoopId ?? null,
+                  selectedLoop: first ?? prev?.selectedLoop ?? null,
+                }));
+                return;
+              }
+
+              setExtrudeMode((prev) => ({ ...(prev ?? {}), ...v }));
+            }}
           />
         </div>
 
-        <Splitter onMouseDown={(e) => startDrag('right', e)} onDoubleClick={toggleCollapseRight} />
+        <Splitter which="right" onDoubleClick={toggleCollapseRight} />
 
         {/* 右：構成ツール */}
-        <aside className="border-l bg-white flex flex-col min-h-0 overflow-hidden" style={{ width: rightWidth }}>
+        <aside
+          className="border-l bg-white flex flex-col min-h-0 overflow-hidden"
+          style={{ width: rightWidth, display: rightWidth > 0 ? 'flex' : 'none' }}
+        >
           <div className="border-b px-3 py-2 text-sm font-semibold truncate">構成ツール</div>
 
           <div className="flex-1 overflow-auto p-3 space-y-4">
             <div className="text-xs text-gray-600">
               選択数: <span className="font-semibold">{expandedShapeSelection.length}</span>
             </div>
+
+            {addDraft ? (
+              <AddShapePanel draft={addDraft} setDraft={setAddDraft} onPlace={placeDraft} onCancel={() => setAddDraft(null)} />
+            ) : null}
+
+            {currentTool !== 'sketch2d' && currentTool !== 'extrude' ? <InspectorPanel obj={primaryObject} onChange={(patch) => updatePrimary(patch)} /> : null}
+
+            {currentTool === 'sketch2d' ? (
+              <SketchToolPanel
+                step={sketchMode?.step ?? 'pickFace'}
+                tool={sketchMode?.tool ?? 'line'}
+                setTool={(t) =>
+                  setSketchMode((prev) => ({
+                    ...(prev ?? {}),
+                    tool: t,
+                    step: prev?.frame ? 'drawing' : prev?.step ?? 'pickFace',
+                  }))
+                }
+                onExit={exitSketch2D}
+                onDeleteLast={deleteLastSketchEntity}
+                entityCount={(sketchEntities ?? []).length}
+              />
+            ) : null}
+
+            {currentTool === 'extrude' ? (
+              <ExtrudePanel
+                step={extrudeMode?.step ?? 'pickFace'}
+                loops={extrudeMode?.loops ?? []}
+                selectedLoopId={extrudeMode?.selectedLoopId ?? null}
+                setSelectedLoopId={(id) => {
+                  const loops = extrudeMode?.loops ?? [];
+                  const sel = loops.find((l) => l.id === id) ?? null;
+                  setExtrudeMode((prev) => ({ ...(prev ?? {}), selectedLoopId: id, selectedLoop: sel }));
+                }}
+                length={extrudeLen}
+                setLength={setExtrudeLen}
+                onDoExtrude={() => {
+                  const sel = extrudeMode?.selectedLoop;
+                  const frame = extrudeMode?.frame;
+                  if (!sel || !frame) return;
+
+                  const L = Math.max(1, Number(extrudeLen) || 1);
+
+                  add('sketch-extrude', {
+                    name: `extrude${Date.now()}`,
+                    frame,
+                    profile: { points: sel.points },
+                    length: L,
+                    position: [0, 0, 0],
+                    pivot: [0, 0, 0],
+                    rotation: [0, 0, 0],
+                    color: '#bfbfbf',
+                  });
+
+                  exitExtrude();
+                }}
+                onExit={exitExtrude}
+              />
+            ) : null}
 
             {steelLoadError ? (
               <div className="rounded border p-2 text-xs">
@@ -1423,14 +2228,11 @@ export default function EditorPage() {
                 catalog={steelCatalog}
                 draft={steelDraft}
                 setDraft={setSteelDraft}
-                onPlace={placeSteel}
+                onPlace={placeSteelObj}
                 onCancel={() => setSteelDraft(null)}
                 disabled={!!steelLoadError}
               />
             ) : null}
-
-            {/* ✅ 新規作成（略：元のまま） */}
-            {/* ...（ここは元コードそのまま。省略してない版を使うなら、あなたのファイルのまま残してOK） */}
 
             {/* ===== 複製：平行 ===== */}
             {currentTool === 'dup-translate' ? (
@@ -1440,40 +2242,20 @@ export default function EditorPage() {
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <div className="text-[10px] text-gray-500 mb-1">ΔX(mm)</div>
-                    <input
-                      className="w-full rounded border px-2 py-1 text-xs"
-                      type="number"
-                      step="1"
-                      value={dupMove.x}
-                      onChange={(e) => setDupMove((d) => ({ ...d, x: e.target.value }))}
-                    />
+                    <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="1" value={dupMove.x} onChange={(e) => setDupMove((d) => ({ ...d, x: e.target.value }))} />
                   </div>
                   <div>
                     <div className="text-[10px] text-gray-500 mb-1">ΔY(mm)</div>
-                    <input
-                      className="w-full rounded border px-2 py-1 text-xs"
-                      type="number"
-                      step="1"
-                      value={dupMove.y}
-                      onChange={(e) => setDupMove((d) => ({ ...d, y: e.target.value }))}
-                    />
+                    <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="1" value={dupMove.y} onChange={(e) => setDupMove((d) => ({ ...d, y: e.target.value }))} />
                   </div>
                   <div>
                     <div className="text-[10px] text-gray-500 mb-1">ΔZ(mm)</div>
-                    <input
-                      className="w-full rounded border px-2 py-1 text-xs"
-                      type="number"
-                      step="1"
-                      value={dupMove.z}
-                      onChange={(e) => setDupMove((d) => ({ ...d, z: e.target.value }))}
-                    />
+                    <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="1" value={dupMove.z} onChange={(e) => setDupMove((d) => ({ ...d, z: e.target.value }))} />
                   </div>
                 </div>
 
                 <button
-                  className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
-                    expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''
-                  }`}
+                  className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
                   type="button"
                   onClick={() => {
                     if (expandedShapeSelection.length === 0) return;
@@ -1483,11 +2265,7 @@ export default function EditorPage() {
                   複製
                 </button>
 
-                <button
-                  className="w-full rounded border px-2 py-1 text-xs hover:bg-gray-50"
-                  type="button"
-                  onClick={() => setDupMove({ x: '0', y: '0', z: '0' })}
-                >
+                <button className="w-full rounded border px-2 py-1 text-xs hover:bg-gray-50" type="button" onClick={() => setDupMove({ x: '0', y: '0', z: '0' })}>
                   リセット
                 </button>
               </div>
@@ -1500,38 +2278,20 @@ export default function EditorPage() {
 
                 <div className="text-[11px] text-gray-500">軸</div>
                 <div className="flex gap-2">
-                  <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
-                    onClick={() => setDupRotAxis('x')}
-                    type="button"
-                  >
+                  <button className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setDupRotAxis('x')} type="button">
                     X
                   </button>
-                  <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
-                    onClick={() => setDupRotAxis('y')}
-                    type="button"
-                  >
+                  <button className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setDupRotAxis('y')} type="button">
                     Y
                   </button>
-                  <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
-                    onClick={() => setDupRotAxis('z')}
-                    type="button"
-                  >
+                  <button className={`flex-1 rounded border px-2 py-1 text-xs ${dupRotAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setDupRotAxis('z')} type="button">
                     Z
                   </button>
                 </div>
 
                 <div>
                   <div className="text-[10px] text-gray-500 mb-1">角度（度）</div>
-                  <input
-                    className="w-full rounded border px-2 py-1 text-xs"
-                    type="number"
-                    step="1"
-                    value={dupRotDeg}
-                    onChange={(e) => setDupRotDeg(e.target.value)}
-                  />
+                  <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="1" value={dupRotDeg} onChange={(e) => setDupRotDeg(e.target.value)} />
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1550,13 +2310,36 @@ export default function EditorPage() {
                 </div>
 
                 <button
-                  className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
-                    expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''
-                  }`}
+                  className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
                   type="button"
                   onClick={() => {
                     if (expandedShapeSelection.length === 0) return;
                     duplicateRotate(dupRotAxis, dupRotDegN);
+                  }}
+                >
+                  複製
+                </button>
+              </div>
+            ) : null}
+
+            {/* ===== 複製：ミラー ===== */}
+            {currentTool === 'dup-mirror' ? (
+              <div className="space-y-2">
+                <div className="text-xs font-semibold">ミラー複製</div>
+                <div className="text-[11px] text-gray-500">軸</div>
+                <div className="flex gap-2">
+                  {['x', 'y', 'z'].map((ax) => (
+                    <button key={ax} className={`flex-1 rounded border px-2 py-1 text-xs ${dupMirrorAxis === ax ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setDupMirrorAxis(ax)} type="button">
+                      {ax.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className={`w-full rounded border px-2 py-1 text-xs hover:bg-gray-50 ${expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  type="button"
+                  onClick={() => {
+                    if (expandedShapeSelection.length === 0) return;
+                    duplicateMirror(dupMirrorAxis);
                   }}
                 >
                   複製
@@ -1580,45 +2363,25 @@ export default function EditorPage() {
 
                 <div className="mt-2 text-[11px] text-gray-500">軸</div>
                 <div className="flex gap-2">
-                  <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
-                    onClick={() => setRotAxis('x')}
-                    type="button"
-                  >
+                  <button className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'x' ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setRotAxis('x')} type="button">
                     X
                   </button>
-                  <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
-                    onClick={() => setRotAxis('y')}
-                    type="button"
-                  >
+                  <button className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'y' ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setRotAxis('y')} type="button">
                     Y
                   </button>
-                  <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`}
-                    onClick={() => setRotAxis('z')}
-                    type="button"
-                  >
+                  <button className={`flex-1 rounded border px-2 py-1 text-xs ${rotAxis === 'z' ? AXIS_ACTIVE : AXIS_INACTIVE}`} onClick={() => setRotAxis('z')} type="button">
                     Z
                   </button>
                 </div>
 
                 <div>
                   <div className="text-[10px] text-gray-500 mb-1">角度（度）</div>
-                  <input
-                    className="w-full rounded border px-2 py-1 text-xs"
-                    type="number"
-                    step="1"
-                    value={rotAngleDeg}
-                    onChange={(e) => setRotAngleDeg(e.target.value)}
-                  />
+                  <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="1" value={rotAngleDeg} onChange={(e) => setRotAngleDeg(e.target.value)} />
                 </div>
 
                 <div className="flex gap-2">
                   <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
-                      expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''
-                    }`}
+                    className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
                     onClick={() => {
                       if (expandedShapeSelection.length === 0) return;
                       rebuildRotBase();
@@ -1628,11 +2391,7 @@ export default function EditorPage() {
                   >
                     確定
                   </button>
-                  <button
-                    className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50"
-                    onClick={() => setRotAngleDeg('0')}
-                    type="button"
-                  >
+                  <button className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50" onClick={() => setRotAngleDeg('0')} type="button">
                     リセット
                   </button>
                 </div>
@@ -1647,41 +2406,21 @@ export default function EditorPage() {
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <div className="text-[10px] text-gray-500 mb-1">ΔX</div>
-                    <input
-                      className="w-full rounded border px-2 py-1 text-xs"
-                      type="number"
-                      step="10" // ✅ ホイールを速くする
-                      value={moveDelta.x}
-                      onChange={(e) => setMoveDelta((d) => ({ ...d, x: e.target.value }))}
-                    />
+                    <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="10" value={moveDelta.x} onChange={(e) => setMoveDelta((d) => ({ ...d, x: e.target.value }))} />
                   </div>
                   <div>
                     <div className="text-[10px] text-gray-500 mb-1">ΔY</div>
-                    <input
-                      className="w-full rounded border px-2 py-1 text-xs"
-                      type="number"
-                      step="10"
-                      value={moveDelta.y}
-                      onChange={(e) => setMoveDelta((d) => ({ ...d, y: e.target.value }))}
-                    />
+                    <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="10" value={moveDelta.y} onChange={(e) => setMoveDelta((d) => ({ ...d, y: e.target.value }))} />
                   </div>
                   <div>
                     <div className="text-[10px] text-gray-500 mb-1">ΔZ</div>
-                    <input
-                      className="w-full rounded border px-2 py-1 text-xs"
-                      type="number"
-                      step="10"
-                      value={moveDelta.z}
-                      onChange={(e) => setMoveDelta((d) => ({ ...d, z: e.target.value }))}
-                    />
+                    <input className="w-full rounded border px-2 py-1 text-xs" type="number" step="10" value={moveDelta.z} onChange={(e) => setMoveDelta((d) => ({ ...d, z: e.target.value }))} />
                   </div>
                 </div>
 
                 <div className="flex gap-2">
                   <button
-                    className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${
-                      expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''
-                    }`}
+                    className={`flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50 ${expandedShapeSelection.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
                     onClick={() => {
                       if (expandedShapeSelection.length === 0) return;
                       rebuildPanBase();
@@ -1691,18 +2430,17 @@ export default function EditorPage() {
                   >
                     確定
                   </button>
-                  <button
-                    className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50"
-                    onClick={() => setMoveDelta({ x: '0', y: '0', z: '0' })}
-                    type="button"
-                  >
+                  <button className="flex-1 rounded border px-2 py-1 text-xs hover:bg-gray-50" onClick={() => setMoveDelta({ x: '0', y: '0', z: '0' })} type="button">
                     リセット
                   </button>
                 </div>
               </div>
             ) : null}
+          </div>
 
-            {/* 以降（単体編集など）は元コードのままでOK */}
+          <div className="shrink-0 border-t p-2 text-[11px] text-gray-500">
+            {currentTool === 'sketch2d' ? 'スケッチ中：面を選択 → 作図' : null}
+            {currentTool === 'extrude' ? '押出し中：面を選択 → 閉領域を選択 → 長さ' : null}
           </div>
         </aside>
       </div>

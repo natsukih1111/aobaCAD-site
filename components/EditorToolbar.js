@@ -1,4 +1,4 @@
-
+// file: components/EditorToolbar.js
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
@@ -17,14 +17,12 @@ export default function EditorToolbar({
   onDeleteSelected,
   canDelete,
 
-  // 表示メニュー用
   onResetLayout,
   leftVisible,
   rightVisible,
   onToggleLeft,
   onToggleRight,
 
-  // ✅ 追加：グループ/融合/分解
   onGroupSelected,
   onUngroupSelected,
   onFuseSelected,
@@ -32,14 +30,16 @@ export default function EditorToolbar({
   canUngroup,
   canFuse,
 
-  // ✅ 追加：影/グリッド
   showShadows,
   showGrid,
   onToggleShadows,
   onToggleGrid,
 
-  // ✅ 追加：鋼材パネルを開く
   onOpenSteelPanel,
+
+  // ✅ 追加：2D作図 / 立体化
+  onStartSketch2D,
+  onStartExtrude,
 }) {
   const [openView, setOpenView] = useState(false);
   const [openDup, setOpenDup] = useState(false);
@@ -62,9 +62,12 @@ export default function EditorToolbar({
 
   const Btn = ({ active, onClick, children, title, disabled }) => (
     <button
-      className={`border px-2 py-1 text-xs hover:bg-gray-50 ${
-        active ? 'bg-gray-200' : 'bg-white'
-      } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+      className={[
+        'border px-2 py-1 text-xs transition',
+        'hover:bg-gray-50',
+        active ? 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300' : 'bg-white',
+        disabled ? 'opacity-40 cursor-not-allowed' : '',
+      ].join(' ')}
       onClick={() => {
         if (disabled) return;
         onClick?.();
@@ -76,15 +79,11 @@ export default function EditorToolbar({
     </button>
   );
 
-  const isDupTool =
-    currentTool === 'dup-translate' || currentTool === 'dup-rotate' || currentTool === 'dup-mirror';
+  const isDupTool = currentTool === 'dup-translate' || currentTool === 'dup-rotate' || currentTool === 'dup-mirror';
 
   return (
     <div className="w-full border-b bg-white">
-      {/* 上段：メニュー */}
       <div className="flex items-center gap-2 px-2 py-1 text-xs">
-        {/* ✅ 左上のリンクは削除 */}
-
         <button className="border px-2 py-1 hover:bg-gray-50" type="button">
           ファイル
         </button>
@@ -92,13 +91,8 @@ export default function EditorToolbar({
           編集
         </button>
 
-        {/* 表示：プルダウン */}
         <div className="relative" ref={viewWrapRef}>
-          <button
-            className="border px-2 py-1 hover:bg-gray-50"
-            type="button"
-            onClick={() => setOpenView((v) => !v)}
-          >
+          <button className="border px-2 py-1 hover:bg-gray-50" type="button" onClick={() => setOpenView((v) => !v)}>
             表示 ▾
           </button>
 
@@ -127,23 +121,10 @@ export default function EditorToolbar({
 
               <div className="my-1 border-t" />
 
-              {/* ✅ 影/グリッド */}
-              <button
-                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
-                type="button"
-                onClick={() => {
-                  onToggleShadows?.();
-                }}
-              >
+              <button className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50" type="button" onClick={() => onToggleShadows?.()}>
                 {showShadows ? '☑' : '☐'} 影（Shadow）
               </button>
-              <button
-                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50"
-                type="button"
-                onClick={() => {
-                  onToggleGrid?.();
-                }}
-              >
+              <button className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50" type="button" onClick={() => onToggleGrid?.()}>
                 {showGrid ? '☑' : '☐'} グリッド線
               </button>
 
@@ -176,7 +157,6 @@ export default function EditorToolbar({
         <div className="ml-auto text-xs text-gray-600">Tool: {currentTool}</div>
       </div>
 
-      {/* 下段：ツールバー */}
       <div className="flex flex-wrap items-center gap-1 px-2 py-1">
         <Btn active={currentTool === 'select'} onClick={() => setTool('select')}>
           選択
@@ -188,7 +168,6 @@ export default function EditorToolbar({
           回転
         </Btn>
 
-        {/* 複製（プルダウン） */}
         <div className="relative" ref={dupWrapRef}>
           <Btn active={isDupTool} onClick={() => setOpenDup((v) => !v)} title="複製（平行 / 回転 / ミラー）">
             複製 ▾
@@ -232,14 +211,12 @@ export default function EditorToolbar({
 
         <span className="mx-1 text-xs text-gray-500">|</span>
 
-        {/* ✅ 鋼材追加 */}
         <Btn onClick={() => onOpenSteelPanel?.()} title="鋼材（チャンネル / Lアングル）を追加">
           鋼材追加
         </Btn>
 
         <span className="mx-1 text-xs text-gray-500">|</span>
 
-        {/* ✅ 作成は「サイズ指定してから」 */}
         <Btn onClick={onAddCube} title="サイズ指定してから配置（mm）">
           立方体
         </Btn>
@@ -255,24 +232,65 @@ export default function EditorToolbar({
 
         <span className="mx-1 text-xs text-gray-500">|</span>
 
+        {/* ✅ モード切替時に必ず select へ戻す */}
         <Btn
           active={selectMode === 'body'}
-          onClick={() => setSelectMode?.('body')}
+          onClick={() => {
+            setTool('select');
+            setSelectMode?.('body');
+          }}
           title="立体そのものを選択"
         >
           立体モード
         </Btn>
         <Btn
           active={selectMode === 'vertex'}
-          onClick={() => setSelectMode?.('vertex')}
+          onClick={() => {
+            setTool('select');
+            setSelectMode?.('vertex');
+          }}
           title="頂点/中点を表示して原点を設定"
         >
           頂点モード
         </Btn>
 
+        <Btn
+          active={currentTool === 'vertex-move'}
+          onClick={() => {
+            setTool('vertex-move');
+          }}
+          title="頂点(1点目)→別立体の頂点/中点(2点目) をクリックすると1点目の立体が移動してくっつく"
+        >
+          頂点移動
+        </Btn>
+
         <span className="mx-1 text-xs text-gray-500">|</span>
 
-        {/* ✅ グループ/融合/分解 */}
+        {/* ✅ 追加：2D作図 / 立体化（ボタン実装は他と同じ Btn を使うだけ） */}
+        <Btn
+          active={currentTool === 'sketch2d'}
+          onClick={() => {
+            setTool('sketch2d'); // Canvas側が currentTool を見て「面ピック→作図」を開始
+            onStartSketch2D?.(); // page.js 側で sketchMode 初期化したい場合用（なくてもOKなら空でも動く）
+          }}
+          title="面をクリックして2D作図を開始"
+        >
+          2D作図
+        </Btn>
+
+        <Btn
+          active={currentTool === 'extrude'}
+          onClick={() => {
+            setTool('extrude'); // Canvas側が currentTool を見て「面ピック→閉ループ選択→押し出し」に入る
+            onStartExtrude?.();
+          }}
+          title="面をクリック→閉じた輪郭を選んで押し出し"
+        >
+          立体化
+        </Btn>
+
+        <span className="mx-1 text-xs text-gray-500">|</span>
+
         <Btn onClick={onGroupSelected} disabled={!canGroup} title="複数選択を1つのグループにまとめる">
           グループ化
         </Btn>

@@ -98,6 +98,11 @@ export default function CuttingTool() {
   // ★重ね切りモード（歩留まり無視）
   const [stackingMode, setStackingMode] = useState(false);
 
+  // ★最適化モード：初期は「総端材最小（global）」
+  // 'global' = 総端材（≒総材料長）を最小に寄せる
+  // 'greedy' = 1本ずつ端材を最小にする（従来）
+  const [optimizeMode, setOptimizeMode] = useState('global'); // ★初期設定
+
   const [rows, setRows] = useState([
     { length: 1500, qty: 2 },
     { length: 1800, qty: 2 },
@@ -111,10 +116,9 @@ export default function CuttingTool() {
   const [stockTable, setStockTable] = useState(getDefaultTable());
   const [newStockLen, setNewStockLen] = useState('6000');
 
-  // ★結果のまとめ表示（歩留まり優先でも使う）
+  // ★結果のまとめ表示
   const [groupSamePattern, setGroupSamePattern] = useState(true);
 
-  // 初回ロード（localStorage）
   useEffect(() => {
     const raw =
       typeof window !== 'undefined'
@@ -131,7 +135,6 @@ export default function CuttingTool() {
     setStockTable(base);
   }, []);
 
-  // 保存（stockTableが変わったら保存）
   useEffect(() => {
     if (typeof window === 'undefined') return;
     localStorage.setItem(STOCK_TABLE_STORAGE_KEY, JSON.stringify(stockTable));
@@ -146,9 +149,7 @@ export default function CuttingTool() {
     setRows((prev) => prev.filter((_, i) => i !== idx));
   }
   function updateRow(idx, key, value) {
-    setRows((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r))
-    );
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r)));
   }
 
   function addRemnantRow() {
@@ -158,12 +159,9 @@ export default function CuttingTool() {
     setRemnants((prev) => prev.filter((_, i) => i !== idx));
   }
   function updateRemnantRow(idx, key, value) {
-    setRemnants((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r))
-    );
+    setRemnants((prev) => prev.map((r, i) => (i === idx ? { ...r, [key]: value } : r)));
   }
 
-  // ★定尺の追加/削除
   function addStockLength() {
     const v = toInt(newStockLen);
     if (v <= 0) return;
@@ -205,7 +203,12 @@ export default function CuttingTool() {
     const out = solveCutting({
       stockLengths,
       rows: cleaned,
-      options: { kerfMm, remnants: cleanedRem, stackingMode },
+      options: {
+        kerfMm,
+        remnants: cleanedRem,
+        stackingMode,
+        optimizeMode, // ★追加
+      },
     });
 
     setResult(out);
@@ -342,15 +345,54 @@ export default function CuttingTool() {
           <div className="text-xs text-gray-500 print:hidden">
             {stackingMode
               ? '同じ切断パターンをできるだけ繰り返して作ります'
-              : '歩留まり（端材の少なさ）優先で作ります'}
+              : '最適化モードに従って、材料の買い方を決めます'}
           </div>
         </div>
 
+        {/* ★最適化モード切替（初期：総端材最小） */}
+        {!stackingMode && (
+          <div className="rounded-xl border p-3 space-y-2 print:border-black">
+            <div className="text-sm font-semibold print:text-lg">最適化モード</div>
+
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="optmode"
+                checked={optimizeMode === 'global'}
+                onChange={() => {
+                  setOptimizeMode('global');
+                  setResult(null);
+                }}
+              />
+              <span className="text-sm print:text-lg">
+                総端材が一番少なくなる（おすすめ）
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="optmode"
+                checked={optimizeMode === 'greedy'}
+                onChange={() => {
+                  setOptimizeMode('greedy');
+                  setResult(null);
+                }}
+              />
+              <span className="text-sm print:text-lg">
+                1本ずつ端材が少なくなる（従来）
+              </span>
+            </label>
+
+            <div className="text-xs text-gray-500 print:hidden">
+              ※「総端材最小」は、次の1本も見て“買う材料の合計”が小さくなる方を選びます。
+            </div>
+          </div>
+        )}
+
         {/* 必要切断 */}
         <div className="space-y-2">
-          <div className="text-sm font-semibold print:text-lg">
-            必要な切断（長さ / 本数）
-          </div>
+          <div className="text-sm font-semibold print:text-lg">必要な切断（長さ / 本数）</div>
 
           <div className="space-y-2">
             {rows.map((r, idx) => (
@@ -451,7 +493,6 @@ export default function CuttingTool() {
         <div className="flex items-center gap-3 mb-2">
           <div className="font-semibold print:text-xl">結果</div>
 
-          {/* ★まとめボタン */}
           {result && result.ok && (
             <button
               className="ml-auto rounded-lg border px-3 py-2 hover:bg-gray-50 text-sm print:hidden"
@@ -463,88 +504,84 @@ export default function CuttingTool() {
           )}
         </div>
 
-        {!result && (
-          <div className="text-sm text-gray-600 print:hidden">「計算する」を押してください。</div>
-        )}
-
-        {result && !result.ok && (
-          <div className="text-sm text-red-600 print:text-black">{result.error}</div>
-        )}
+        {!result && <div className="text-sm text-gray-600 print:hidden">「計算する」を押してください。</div>}
+        {result && !result.ok && <div className="text-sm text-red-600 print:text-black">{result.error}</div>}
 
         {result && result.ok && (
           <div className="space-y-4">
             <div className="rounded-lg bg-gray-50 border p-3 text-sm space-y-1 print:bg-white print:border-black print:text-lg">
-  <div>
-    <span className="font-semibold">モード：</span>
-    {result.summary.stackingMode ? '重ね切り（歩留まり無視）' : '歩留まり優先'}
-  </div>
+              <div>
+                <span className="font-semibold">モード：</span>
+                {result.summary.stackingMode ? '重ね切り（歩留まり無視）' : '歩留まり優先'}
+              </div>
 
-  <div>
-    <span className="font-semibold">切断しろ：</span>
-    {result.summary.kerfMm} mm
-  </div>
+              {!result.summary.stackingMode && (
+                <div>
+                  <span className="font-semibold">最適化：</span>
+                  {result.summary.optimizeMode === 'global' ? '総端材最小' : '1本ずつ端材最小'}
+                </div>
+              )}
 
-  <div>
-    <span className="font-semibold">購入本数（定尺のみ）：</span>
-    {result.summary.purchasedBarsCount} 本
-  </div>
+              <div>
+                <span className="font-semibold">切断しろ：</span>
+                {result.summary.kerfMm} mm
+              </div>
 
-  <div>
-    <span className="font-semibold">定尺内訳（購入分）：</span>
-    {Object.keys(result.summary.byPurchasedStock || {}).length === 0
-      ? '購入なし'
-      : Object.entries(result.summary.byPurchasedStock)
-          .sort((a, b) => Number(a[0]) - Number(b[0]))
-          .map(([k, v]) => `${k}mm × ${v}本`)
-          .join(' / ')}
-  </div>
+              <div>
+                <span className="font-semibold">購入本数（定尺のみ）：</span>
+                {result.summary.purchasedBarsCount} 本
+              </div>
 
-  <div>
-    <span className="font-semibold">端材使用：</span>
-    {result.summary.usedRemnantsCount} 本
-    {result.summary.usedRemnantsCount > 0 && (
-      <span className="text-xs text-gray-600 print:text-black">
-        {' '}
-        （{(result.summary.usedRemnants || []).join(', ')} mm）
-      </span>
-    )}
-  </div>
+              <div>
+                <span className="font-semibold">定尺内訳（購入分）：</span>
+                {Object.keys(result.summary.byPurchasedStock || {}).length === 0
+                  ? '購入なし'
+                  : Object.entries(result.summary.byPurchasedStock)
+                      .sort((a, b) => Number(a[0]) - Number(b[0]))
+                      .map(([k, v]) => `${k}mm × ${v}本`)
+                      .join(' / ')}
+              </div>
 
-  <div>
-    <span className="font-semibold">総材料長：</span>
-    {result.summary.totalStockAll} mm　
-    <span className="font-semibold ml-3">総使用：</span>
-    {result.summary.totalUsedAll} mm　
-    <span className="font-semibold ml-3">総端材：</span>
-    {result.summary.totalRemainAll} mm
-  </div>
+              <div>
+                <span className="font-semibold">端材使用：</span>
+                {result.summary.usedRemnantsCount} 本
+                {result.summary.usedRemnantsCount > 0 && (
+                  <span className="text-xs text-gray-600 print:text-black">
+                    {' '}
+                    （{(result.summary.usedRemnants || []).join(', ')} mm）
+                  </span>
+                )}
+              </div>
 
-  <div>
-    <span className="font-semibold">切断しろ合計：</span>
-    {result.summary.totalKerfAll} mm
-  </div>
+              <div>
+                <span className="font-semibold">総材料長：</span>
+                {result.summary.totalStockAll} mm　
+                <span className="font-semibold ml-3">総使用：</span>
+                {result.summary.totalUsedAll} mm　
+                <span className="font-semibold ml-3">総端材：</span>
+                {result.summary.totalRemainAll} mm
+              </div>
 
-  <div>
-    <span className="font-semibold">歩留まり：</span>
-    {Number(result.summary.yieldPct || 0).toFixed(2)} %
-  </div>
-</div>
+              <div>
+                <span className="font-semibold">切断しろ合計：</span>
+                {result.summary.totalKerfAll} mm
+              </div>
 
+              <div>
+                <span className="font-semibold">歩留まり：</span>
+                {Number(result.summary.yieldPct || 0).toFixed(2)} %
+              </div>
+            </div>
 
             <div className="space-y-3">
               {displayBars.map((bar, i) => {
                 const showRange = bar._endNo > bar._startNo;
-                const labelNo = showRange
-                  ? `No.${bar._startNo}~${bar._endNo}`
-                  : `No.${bar._startNo}`;
+                const labelNo = showRange ? `No.${bar._startNo}~${bar._endNo}` : `No.${bar._startNo}`;
 
                 return (
                   <div
                     key={i}
-                    className={[
-                      'rounded-lg border p-3 print:border-black',
-                      'print:[break-inside:avoid]',
-                    ].join(' ')}
+                    className={['rounded-lg border p-3 print:border-black', 'print:[break-inside:avoid]'].join(' ')}
                   >
                     <div className="flex items-center gap-2">
                       <div className="font-semibold">{labelNo}</div>
@@ -563,9 +600,7 @@ export default function CuttingTool() {
                       </div>
 
                       {bar._count > 1 && (
-                        <div className="ml-auto font-bold text-sm print:text-lg">
-                          ×{bar._count}本
-                        </div>
+                        <div className="ml-auto font-bold text-sm print:text-lg">×{bar._count}本</div>
                       )}
                     </div>
 
